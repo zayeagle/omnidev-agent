@@ -49,6 +49,94 @@ Core modules (agent loop, tools, permissions, sessions) are built in-house. LLM 
 
 ---
 
+## Runtime environment
+
+What you need on the machine where **omnidev-agent** runs (TUI or headless).
+
+### Platform support
+
+| OS | TUI | Headless (`-p`) | Notes |
+|----|-----|-----------------|-------|
+| **Linux** | ✅ Recommended | ✅ | Native PTY; best-tested |
+| **macOS** | ✅ | ✅ | Same as Linux |
+| **Windows** | ✅ | ✅ | Use **Windows Terminal** or modern conhost; build/run via `scripts/install.ps1` or `bin/omnidev-agent.exe` |
+| **WSL** | ✅ | ✅ | Run the Linux binary inside WSL; do **not** use Bubbletea `WithInputTTY()` (breaks CJK IME) |
+
+Supported CPU architectures: **amd64**, **arm64** (see `make build-<os>-<arch>`).
+
+### Build from source (optional)
+
+Only required if you compile locally (`make build` / `make deploy`):
+
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| [Go](https://go.dev/dl/) | **1.24.5+** (see `go.mod`) | Build the binary |
+| `make`, `bash` | — | Makefile targets on Linux/macOS |
+| `git` | — | Clone / update the repo |
+
+Running a **pre-built** binary (`make install`, release artifact, or `scripts/install.ps1`) does **not** require Go at runtime.
+
+### TUI terminal requirements
+
+The interactive UI uses [Bubbletea](https://github.com/charmbracelet/bubbletea) with **alternate screen** mode.
+
+| Requirement | Details |
+|-------------|---------|
+| **Interactive TTY** | Run in a real terminal (SSH session, local console, Windows Terminal). Piping stdout or running under non-TTY CI without `-p` will not show the TUI. |
+| **Terminal size** | At least **80×24** columns/rows recommended; layout adapts to window resize. |
+| **Unicode / UTF-8** | User input and LLM output may include non-ASCII text; set locale/encoding to UTF-8. |
+| **ANSI colors** | True-color or 256-color terminals work best; basic ANSI is supported. |
+| **Mouse** (optional) | Set `OMNIDEV_MOUSE_SCROLL=1` for wheel scrolling; may interfere with native terminal copy/paste. |
+
+If the TUI fails to start, use headless mode: `omnidev-agent -p "your task"`.
+
+### Network and LLM API
+
+| Requirement | Details |
+|-------------|---------|
+| **Outbound HTTPS** | Access to your configured `base_url` (e.g. OpenAI, DeepSeek, Anthropic, or corporate gateway). |
+| **API credentials** | Valid `api_key` in `.omnidev-agent.json`, `~/.omnidev-agent/config.json`, or `OMNIDEV_API_KEY`. |
+| **Proxy / firewall** | If the gateway is internal, ensure the host can reach it; configure OS-level `HTTP_PROXY` / `HTTPS_PROXY` if needed (standard Go `net/http`). |
+
+No local LLM runtime (Ollama, etc.) is bundled — point `base_url` at your own server if you use one.
+
+### Shell and tools (agent `shell_exec`)
+
+When the agent runs shell commands (after your approval):
+
+| OS | Shell used |
+|----|------------|
+| Linux / macOS | `$SHELL`, or `/bin/sh` if unset |
+| Windows | `%ComSpec%` (typically `cmd.exe /C …`) |
+
+Timeout: **30 seconds** per command (hard limit in `shell_exec`).
+
+The agent itself does **not** require `git`, `rg`, `grep`, or Node installed — file/code search uses built-in Go walks. The **LLM may still invoke** project tools (`go`, `npm`, etc.) via `shell_exec` depending on your task; install those in the project environment as usual.
+
+### Filesystem and permissions
+
+| Path / action | Purpose |
+|---------------|---------|
+| **Current working directory** | Project root the agent reads and writes; run `omnidev-agent` from your repo or task folder. |
+| `.omnidev-agent.json` | Project config (create with `make config`). |
+| `.ai_history/sessions/` | Session snapshots (auto-created). |
+| `.ai_history/checkpoints/` | Multi-task checkpoints (auto-created). |
+| `deliverables/` | Default output workspace for new/greenfield projects. |
+
+The OS user running omnidev-agent must have read access to the project and write access where the agent is allowed to create or modify files.
+
+### Environment variables (runtime)
+
+Besides config overrides (see [Configuration](#configuration)), these affect runtime behavior only:
+
+```bash
+OMNIDEV_MOUSE_SCROLL=1    # optional TUI mouse wheel
+OMNIDEV_LLM_DEBUG=1         # log LLM request/response to stderr (debug)
+HTTP_PROXY / HTTPS_PROXY  # optional corporate proxy (Go standard)
+```
+
+---
+
 ## Quick Start
 
 ```bash
