@@ -1,12 +1,13 @@
 # ── omnidev-agent Makefile ──────────────────────────────────────────────────
 
 SHELL   := /bin/bash
-GO      := /usr/local/go/bin/go
+GO      ?= go
 BIN_DIR := bin
 SRC     := ./cmd/omnidev-agent
 VERSION := $(shell tr -d '\r\n ' < VERSION 2>/dev/null || echo "0.0.0")
-BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
-LDFLAGS := -X main.appVersion=$(VERSION) -X 'main.buildTime=$(BUILD_TIME)'
+
+# BUILD_TIME is expanded in the recipe so each build/deploy gets a fresh timestamp.
+GO_LDFLAGS = -ldflags "-X main.appVersion=$(VERSION) -X 'main.buildTime=$$(date '+%Y-%m-%d %H:%M:%S')'"
 
 # Install destination
 PREFIX         ?= $(HOME)/.local
@@ -17,7 +18,7 @@ GOOSES   := linux darwin windows
 GOARCHES := amd64 arm64
 EXT_windows := .exe
 
-.PHONY: all build run test vet clean install uninstall deploy help config
+.PHONY: all build rebuild run test vet clean install install-binary uninstall deploy help config
 .PHONY: build-all fmt lint bump-patch bump-minor bump-major publish
 .PHONY: $(foreach os,$(GOOSES),$(foreach arch,$(GOARCHES),build-$(os)-$(arch)))
 
@@ -27,8 +28,15 @@ all: vet build test
 # ── Build (native) ─────────────────────────────────────────────────────────
 build:
 	@mkdir -p $(BIN_DIR)
-	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/omnidev-agent $(SRC)
+	$(GO) build $(GO_LDFLAGS) -o $(BIN_DIR)/omnidev-agent $(SRC)
 	@echo "✔ Built: $(BIN_DIR)/omnidev-agent (v$(VERSION))"
+
+# Force a full rebuild (used by deploy so installed binary always matches sources).
+rebuild:
+	@mkdir -p $(BIN_DIR)
+	@rm -f $(BIN_DIR)/omnidev-agent
+	$(GO) build -a $(GO_LDFLAGS) -o $(BIN_DIR)/omnidev-agent $(SRC)
+	@echo "✔ Rebuilt: $(BIN_DIR)/omnidev-agent (v$(VERSION))"
 
 # ── Version bump (semver in VERSION file) ────────────────────────────────────
 bump-patch:
@@ -53,7 +61,7 @@ publish: bump-patch
 define build_rule
 build-$(1)-$(2):
 	@mkdir -p $(BIN_DIR)
-	GOOS=$(1) GOARCH=$(2) $(GO) build -ldflags "$(LDFLAGS)" \
+	GOOS=$(1) GOARCH=$(2) $(GO) build $(GO_LDFLAGS) \
 		-o $(BIN_DIR)/omnidev-agent-$(1)-$(2)$$(EXT_$(1)) $(SRC)
 	@echo "✔ Built: $(BIN_DIR)/omnidev-agent-$(1)-$(2)$$(EXT_$(1)) (v$(VERSION))"
 endef
@@ -96,10 +104,13 @@ clean:
 	@echo "✔ Cleaned build artifacts"
 
 # ── Install ────────────────────────────────────────────────────────────────
-install: build
+install-binary:
+	@test -f $(BIN_DIR)/omnidev-agent || (echo "✗ missing $(BIN_DIR)/omnidev-agent — run make build first" && exit 1)
 	@install -d $(INSTALL_BIN_DIR)
 	install -m 755 $(BIN_DIR)/omnidev-agent $(INSTALL_BIN_DIR)/omnidev-agent
-	@echo "✔ Installed to $(INSTALL_BIN_DIR)/omnidev-agent"
+	@echo "✔ Installed to $(INSTALL_BIN_DIR)/omnidev-agent (v$(VERSION))"
+
+install: build install-binary
 
 # ── Uninstall ──────────────────────────────────────────────────────────────
 uninstall:
@@ -125,7 +136,7 @@ config:
 	@echo "  ✎ Edit .omnidev-agent.json to set your API key and provider."
 
 # ── Deploy ─────────────────────────────────────────────────────────────────
-deploy: install config
+deploy: rebuild install-binary config
 	@echo ""
 	@echo "── Deployment complete ──"
 	@echo "  Binary:   $(INSTALL_BIN_DIR)/omnidev-agent"
@@ -154,9 +165,10 @@ help:
 	@echo "  make fmt                    代码格式化"
 	@echo "  make lint                   fmt + vet"
 	@echo "  make clean                  清理 bin/"
-	@echo "  make install                安装到 $(INSTALL_BIN_DIR)"
+	@echo "  make install                编译并安装到 $(INSTALL_BIN_DIR)"
 	@echo "  make uninstall              卸载 + 清理配置"
-	@echo "  make deploy                 install + config + PATH 检查"
+	@echo "  make deploy                 强制全量重编译 + 安装 + config"
+	@echo "  make rebuild                强制全量重编译 (go build -a)"
 	@echo "  make bump-patch             0.0.0 -> 0.0.1 (VERSION file)"
 	@echo "  make publish                bump-patch + commit VERSION + push"
 	@echo "  make help                   此帮助"
