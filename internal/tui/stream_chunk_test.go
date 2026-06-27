@@ -21,3 +21,10 @@ func TestPrepareStreamChunk_Empty(t *testing.T) {
 		t.Fatal("empty chunk should be skipped")
 	}
 }
+
+func TestPrepareStreamChunk_ArchitectureHidden(t *testing.T) {
+	_, marker, ok := prepareStreamChunk("Architecture: minimal — prefer a single file or very few files; no DDD scaffold.")
+	if !ok || marker == "" {
+		t.Fatal("architecture status should be pipeline noise, not shown in reply")
+	}
+}

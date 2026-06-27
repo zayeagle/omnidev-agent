@@ -335,8 +335,9 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 	case agent.StreamChunkMsg:
 		if appendText, marker, ok := prepareStreamChunk(msg.Content); ok {
 			if marker != "" {
+				t.AddStatusLine(marker)
 				handlePipelineMarker(t, marker)
-			} else if t.IsChatMode() || len(t.Tasks) == 0 {
+			} else if t.IsChatMode() {
 				if msg.Done {
 					t.FlushReply(appendText)
 				} else {
@@ -619,7 +620,11 @@ func isPipelineNoise(content string) bool {
 		"Legacy project detected",
 		"New project detected",
 		"Project workspace ready",
+		"Standalone project workspace",
 		"Project analysis complete",
+		"Architecture:",
+		"Single task — executing",
+		"Task planning failed",
 		"DDD structure ready",
 		"Decomposed into",
 		"Falling back to sequential",
@@ -628,6 +633,7 @@ func isPipelineNoise(content string) bool {
 		"Scanning project structure",
 		"Initializing DDD",
 		"Scaffold warning:",
+		"Workspace warning:",
 		"All sub-tasks completed",
 		"[Task ",
 		"[SUB-TASK RESULTS]",

@@ -175,6 +175,10 @@ type Turn struct {
 	replyOutput strings.Builder
 	chatMode    bool
 
+	// Pipeline status (architecture, workspace ready, etc.) — separate from LLM reply
+	statusLines      []string
+	pendingContentGap bool
+
 	// Shown when all tasks complete
 	completionMsg string
 	projectDir    string
@@ -241,14 +245,22 @@ func (t *Turn) FailStep(typ StepType, err string) {
 }
 
 func (t *Turn) AppendLLM(text string) {
+	if text == "" {
+		return
+	}
+	if t.pendingContentGap {
+		t.beginContentGap(&t.llmOutput)
+		t.pendingContentGap = false
+	}
 	t.llmOutput.WriteString(text)
 	t.streaming = true
 }
 
 func (t *Turn) FlushLLM(text string) {
 	if text != "" {
-		t.llmOutput.WriteString(text)
+		t.AppendLLM(text)
 	}
+	t.finishContentSegment(&t.llmOutput)
 	t.streaming = false
 }
 
@@ -316,12 +328,52 @@ func (t *Turn) SetChatMode(v bool) { t.chatMode = v }
 func (t *Turn) IsChatMode() bool   { return t.chatMode }
 
 func (t *Turn) AppendReply(text string) {
+	if text == "" {
+		return
+	}
+	if t.pendingContentGap {
+		t.beginContentGap(&t.replyOutput)
+		t.pendingContentGap = false
+	}
 	t.replyOutput.WriteString(text)
 }
 
 func (t *Turn) FlushReply(text string) {
 	if text != "" {
-		t.replyOutput.WriteString(text)
+		t.AppendReply(text)
+	}
+	t.finishContentSegment(&t.replyOutput)
+}
+
+func (t *Turn) AddStatusLine(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if len(t.statusLines) > 0 && t.statusLines[len(t.statusLines)-1] == line {
+		return
+	}
+	t.statusLines = append(t.statusLines, line)
+	t.pendingContentGap = true
+}
+
+func (t *Turn) beginContentGap(b *strings.Builder) {
+	s := strings.TrimRight(b.String(), " \t")
+	if s == "" {
+		return
+	}
+	b.Reset()
+	b.WriteString(s)
+	b.WriteString("\n\n")
+}
+
+func (t *Turn) finishContentSegment(b *strings.Builder) {
+	s := b.String()
+	if s == "" {
+		return
+	}
+	if !strings.HasSuffix(s, "\n") {
+		b.WriteString("\n")
 	}
 }
 
@@ -330,7 +382,9 @@ func (t *Turn) SetCompletion(summary, projectDir string) {
 	t.completionMsg = summary
 }
 
-func (t *Turn) HasCompletion() bool { return strings.TrimSpace(t.completionMsg) != "" }
+func (t *Turn) HasCompletion() bool {
+	return strings.TrimSpace(t.projectDir) != "" || strings.TrimSpace(t.completionMsg) != ""
+}
 
 func (t *Turn) TickSpinner() {
 	if t.active {
@@ -643,11 +697,20 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 	}
 	lines = append(lines, "")
 
+	if len(t.statusLines) > 0 {
+		for _, sl := range t.statusLines {
+			for _, wl := range wrapLine(sl, cw) {
+				lines = append(lines, turnStepStyle.Render(wl))
+			}
+			lines = append(lines, "")
+		}
+	}
+
 	if !skipTasks && len(t.Tasks) > 0 {
 		lines = append(lines, RenderTodoList(t.Tasks, width)...)
 	}
 
-	if t.llmOutput.Len() > 0 && !t.chatMode {
+	if t.llmOutput.Len() > 0 && !t.chatMode && !t.HasCompletion() {
 		lines = append(lines, t.renderThinking(cw)...)
 	}
 
@@ -655,7 +718,7 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 		lines = append(lines, t.renderToolCalls(cw)...)
 	}
 
-	if t.replyOutput.Len() > 0 {
+	if t.replyOutput.Len() > 0 && !t.HasCompletion() {
 		output := strings.TrimRight(t.replyOutput.String(), "\n")
 		style := turnAssistStyle
 		if t.chatMode {

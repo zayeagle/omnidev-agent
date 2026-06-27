@@ -133,7 +133,13 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 	}
 
 	// 5. Main agent loop (minimal/default path, or fallback after DDD dispatch failure)
-	return a.standardLoop(ctx, msgCh, true)
+	if a.projectLayout != LayoutDDD {
+		msgCh <- TaskPlanMsg{Tasks: []TaskPlanItem{{ID: "1", Description: instruction}}}
+	}
+	if err := a.standardLoop(ctx, msgCh, true); err != nil {
+		return err
+	}
+	return nil
 }
 
 // classifyIntent runs an inexpensive LLM call to determine whether the user
@@ -452,6 +458,10 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 
 	// Done — only the parent agent loop signals completion to the TUI.
 	if !a.subAgent {
+		if a.outputDir != "" && a.state != StateError {
+			taskCount := 1
+			msgCh <- NewAllComplete(taskCount, a.outputDir)
+		}
 		a.setState(StateDone)
 		msgCh <- AgentStateMsg{State: StateDone}
 		msgCh <- DoneMsg{}

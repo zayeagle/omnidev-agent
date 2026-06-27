@@ -13,11 +13,12 @@ var (
 				BorderForeground(lipgloss.Color("#059669")).
 				Padding(0, 1)
 	completionTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#D1FAE5"))
+	completionHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF")).Italic(true)
 )
 
 // CompletionPanelLines renders a pinned completion banner (always visible after success).
 func CompletionPanelLines(t *Turn, width int) []string {
-	if t == nil || strings.TrimSpace(t.completionMsg) == "" {
+	if t == nil || strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" {
 		return nil
 	}
 	if width < 20 {
@@ -33,26 +34,28 @@ func CompletionPanelLines(t *Turn, width int) []string {
 	}
 
 	var rows []string
-	for _, line := range strings.Split(strings.TrimSpace(t.completionMsg), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	if t.projectDir != "" {
+		rows = append(rows, completionTextStyle.Render("Project location:"))
+		for _, wl := range WrapDisplayWidth(t.projectDir, inner) {
+			rows = append(rows, completionTextStyle.Render("  "+wl))
 		}
-		for i, wl := range WrapDisplayWidth(line, inner) {
-			if i == 0 {
-				rows = append(rows, completionTextStyle.Render(wl))
-			} else {
+		rows = append(rows, completionHintStyle.Render("  Open this directory in your browser or editor to run the result."))
+	} else if msg := strings.TrimSpace(t.completionMsg); msg != "" {
+		for _, line := range strings.Split(msg, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			for _, wl := range WrapDisplayWidth(line, inner) {
 				rows = append(rows, completionTextStyle.Render(wl))
 			}
 		}
 	}
-	if t.projectDir != "" && !strings.Contains(t.completionMsg, t.projectDir) {
-		rows = append(rows, completionTextStyle.Render("New project path:"))
-		for _, wl := range WrapDisplayWidth(t.projectDir, inner) {
-			rows = append(rows, completionTextStyle.Render("  "+wl))
-		}
+
+	if len(rows) == 0 {
+		return nil
 	}
 
 	box := completionBoxStyle.Width(boxWidth).Render(strings.Join(rows, "\n"))
-	return []string{"", completionHeaderStyle.Render("✓ All tasks completed"), box, ""}
+	return []string{"", completionHeaderStyle.Render("✓ Task completed"), box, ""}
 }

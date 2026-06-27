@@ -356,11 +356,7 @@ func (d *TaskDispatcher) mergeResults(results []TaskResult, msgCh chan<- tea.Msg
 		}
 	}
 	if allOK {
-		summary := formatCompletionSummary(len(results), projectDir)
-		msgCh <- AllCompleteMsg{
-			Summary:    summary,
-			ProjectDir: projectDir,
-		}
+		msgCh <- NewAllComplete(len(results), projectDir)
 	} else {
 		msgCh <- StreamChunkMsg{Content: "Some sub-tasks failed. See details above.", Done: true}
 	}
@@ -516,18 +512,4 @@ func parseTaskNum(id string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(strings.TrimSpace(id), "%d", &n)
 	return n, err
-}
-
-func formatCompletionSummary(taskCount int, projectDir string) string {
-	var b strings.Builder
-	if taskCount > 1 {
-		b.WriteString(fmt.Sprintf("All %d tasks completed.", taskCount))
-	} else {
-		b.WriteString("All tasks completed.")
-	}
-	if projectDir != "" {
-		b.WriteString("\n\nNew project path:\n  ")
-		b.WriteString(projectDir)
-	}
-	return b.String()
 }

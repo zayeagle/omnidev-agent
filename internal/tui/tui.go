@@ -116,7 +116,7 @@ func (m *model) pinTasksTurn() *components.Turn {
 	if t == nil || len(t.Tasks) == 0 {
 		return nil
 	}
-	if m.isWorking() || t.HasCompletion() {
+	if m.isWorking() || t.HasCompletion() || t.FinalStatus == components.TurnDone {
 		return t
 	}
 	return nil

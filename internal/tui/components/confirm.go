@@ -9,22 +9,25 @@ import (
 
 // Confirm colors
 var (
-	confirmBorder      = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#F87171")).Padding(1, 2)
-	confirmTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
-	confirmDescStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9FAFB"))
-	confirmApproveKey  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34D399"))
-	confirmDenyKey     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
-	confirmOverlay     = lipgloss.NewStyle().Background(lipgloss.Color("#000000")).Foreground(lipgloss.Color("#F9FAFB"))
+	confirmBorder     = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#F87171")).Padding(1, 2)
+	confirmTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
+	confirmDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9FAFB"))
+	confirmApproveKey = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34D399"))
+	confirmDenyKey    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
+	confirmOverlayBG  = lipgloss.NewStyle().Background(lipgloss.Color("#000000"))
 )
 
 // ConfirmDialogHeight is the terminal rows reserved while the permission overlay is shown.
 const ConfirmDialogHeight = 8
 
-// ConfirmDialog renders a permission approval overlay.
-// Returns the dialog string, centered for the given width.
+// ConfirmDialog renders a permission approval overlay, centered for the given width.
 func ConfirmDialog(width int, level, description string, remainingSec int) string {
 	if width < 40 {
 		width = 40
+	}
+	innerW := width - 8
+	if innerW < 28 {
+		innerW = 28
 	}
 
 	var content strings.Builder
@@ -33,7 +36,15 @@ func ConfirmDialog(width int, level, description string, remainingSec int) strin
 	content.WriteString(title + "\n\n")
 
 	content.WriteString(confirmDescStyle.Render(fmt.Sprintf("  Level:   %s", level)) + "\n")
-	content.WriteString(confirmDescStyle.Render(fmt.Sprintf("  Command: %s", description)) + "\n\n")
+	descLines := WrapDisplayWidth(description, innerW-2)
+	for i, line := range descLines {
+		prefix := "  Command: "
+		if i > 0 {
+			prefix = "           "
+		}
+		content.WriteString(confirmDescStyle.Render(prefix+line) + "\n")
+	}
+	content.WriteString("\n")
 
 	content.WriteString("  ")
 	content.WriteString(confirmApproveKey.Render("[Y] Approve"))
@@ -48,19 +59,23 @@ func ConfirmDialog(width int, level, description string, remainingSec int) strin
 	}
 
 	dialog := confirmBorder.Render(content.String())
-	dialogWidth := lipgloss.Width(dialog)
-
-	// Center horizontally
-	pad := (width - dialogWidth) / 2
-	if pad < 0 {
-		pad = 0
-	}
-
-	return strings.Repeat(" ", pad) + dialog
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
 }
 
-// ConfirmOverlay wraps the dialog with a full-width dark background.
+// ConfirmOverlay wraps the dialog with a full-width dark background without stretching borders.
 func ConfirmOverlay(width int, dialog string) string {
-	padded := lipgloss.NewStyle().Padding(1, 0).Render(dialog)
-	return confirmOverlay.Width(width).Render(padded)
+	if width < 1 {
+		width = 80
+	}
+	block := lipgloss.NewStyle().Padding(1, 0).Render(dialog)
+	lines := strings.Split(block, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		pad := width - lipgloss.Width(line)
+		if pad < 0 {
+			pad = 0
+		}
+		out = append(out, confirmOverlayBG.Render(line+strings.Repeat(" ", pad)))
+	}
+	return strings.Join(out, "\n")
 }

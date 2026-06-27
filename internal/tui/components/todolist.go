@@ -55,7 +55,13 @@ func RenderTodoList(tasks []*TaskEntry, width int) []string {
 	}
 
 	box := todoBoxStyle.Width(boxWidth).Render(strings.Join(rows, "\n"))
-	header := todoHeaderStyle.Render(fmt.Sprintf("To-dos %d", len(tasks)))
+	done := 0
+	for _, tk := range tasks {
+		if tk.Status == StatusSuccess {
+			done++
+		}
+	}
+	header := todoHeaderStyle.Render(fmt.Sprintf("To-dos %d/%d", done, len(tasks)))
 
 	return []string{"", header, box, ""}
 }
