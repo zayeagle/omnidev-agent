@@ -1,0 +1,13 @@
+{
+  "provider":    "openai",
+  "base_url":    "https://api.openai.com/v1",
+  "api_key":     "sk-your-key-here",
+  "model":       "gpt-4o",
+  "max_tokens":  8192,
+  "temperature": 0.7,
+  "compat_mode": "auto",
+  "timeout":     120,
+  "max_turns":   20,
+  "log_level":   "info",
+  "session_dir": ".ai_history/sessions/"
+}

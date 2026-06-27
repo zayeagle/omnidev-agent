@@ -1,0 +1,39 @@
+# ── Go ──
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Local dev ──
+vendor/
+
+# ── Deliverables binaries ──
+deliverables/demo_snakes/snake
+
+# ── Agent pollution (never commit generated apps at repo root) ──
+/omnidev-agent
+go-user-api/
+cmd/printcwd/
+hello_server
+hello_server.exe
+
+# ── Secrets ──
+.omnidev-agent.json
+
+# ── Local runtime / collaboration logs (never commit) ──
+.ai_history/
