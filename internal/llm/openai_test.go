@@ -32,12 +32,12 @@ func TestOpenAIRequestIncludesMaxTokens(t *testing.T) {
 	}
 }
 
-func TestOpenAIRequestWithToolsUsesStream(t *testing.T) {
+func TestOpenAIRequestWithToolsOmitsStream(t *testing.T) {
 	client := NewOpenAI("https://api.example.com/v1", "key", "gpt-4o", Options{MaxTokens: 4096, TimeoutSec: 30, GatewayMode: GatewayOpenAI})
 	body := client.buildRequest(&Request{
 		Messages: []Message{{Role: "user", Content: "hi"}},
 		Tools:    []Tool{{Name: "read_file", Description: "read", Parameters: map[string]interface{}{}}},
-	}, true)
+	}, false)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +46,8 @@ func TestOpenAIRequestWithToolsUsesStream(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m["stream"] != true {
-		t.Fatalf("tool request should set stream=true, got %v", m["stream"])
+	if _, ok := m["stream"]; ok {
+		t.Fatalf("tool chat request should omit stream (gateway streams anyway), got %v", m["stream"])
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -33,10 +34,9 @@ func NewOpenAI(baseURL, apiKey, model string, opts Options) *OpenAIClient {
 	}
 }
 
-// Chat sends a non-streaming request (or SSE when tools are present — some gateways require stream for tool calls).
+// Chat sends a request and accepts JSON or SSE responses (many gateways stream even without stream=true).
 func (c *OpenAIClient) Chat(ctx context.Context, req *Request) (*Response, error) {
-	stream := len(req.Tools) > 0
-	body := c.buildRequest(req, stream)
+	body := c.buildRequest(req, false)
 	resp, err := c.doRequest(ctx, body)
 	if err != nil {
 		return nil, err
@@ -118,6 +118,10 @@ func (c *OpenAIClient) doRequest(ctx context.Context, body openAIRequest) (*open
 	}
 	c.setHeaders(httpReq)
 
+	if os.Getenv("OMNIDEV_LLM_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "llm → POST %s (%d bytes)\n%s\n", c.endpoint(), len(rawBody), rawBody)
+	}
+
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -127,6 +131,9 @@ func (c *OpenAIClient) doRequest(ctx context.Context, body openAIRequest) (*open
 	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		return nil, err
+	}
+	if os.Getenv("OMNIDEV_LLM_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "llm ← HTTP %d (%d bytes)\n%s\n", httpResp.StatusCode, len(respBody), truncateBody(respBody))
 	}
 	if httpResp.StatusCode >= 400 {
 		if err := extractSSEError(respBody); err != nil {

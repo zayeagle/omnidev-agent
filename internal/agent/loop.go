@@ -111,13 +111,12 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 		}
 	}
 
-	// 4. LLM Decomposition (always for code modification)
-	//    Simple tasks → 1 task; complex tasks → N tasks with DAG
-	if a.dispatcher != nil {
+	// 4. LLM Decomposition — DDD projects only; minimal scope runs the main agent loop directly.
+	if a.dispatcher != nil && a.projectLayout == LayoutDDD {
 		handled, err := a.dispatcher.Dispatch(ctx, instruction, msgCh)
 		if err != nil {
 			msgCh <- StreamChunkMsg{
-				Content: fmt.Sprintf("Decomposition failed (%v), falling back to sequential execution.", err),
+				Content: fmt.Sprintf("Task planning failed (%v), falling back to sequential execution.", err),
 				Done:    true,
 			}
 		}
@@ -133,8 +132,7 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 		}
 	}
 
-	// 5. Standard loop fallback
-	a.session.AddWithState("system", "Falling back to sequential execution.", StateThinking.String(), 0)
+	// 5. Main agent loop (minimal/default path, or fallback after DDD dispatch failure)
 	return a.standardLoop(ctx, msgCh, true)
 }
 
