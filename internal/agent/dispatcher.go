@@ -278,7 +278,8 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 			subSess.Add(e)
 		}
 	}
-	subSess.AddWithState("user", task.Description, StateThinking.String(), 0)
+	// User message is added by RunLoop; pre-adding here caused duplicate consecutive
+	// user roles, which strict OpenAI-compatible gateways reject with 400.
 
 	subGuard := NewProjectAwarenessGuard(d.agent.toolbox, subSess, "")
 	subGuard.state = GuardDone

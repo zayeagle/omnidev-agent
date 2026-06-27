@@ -101,6 +101,30 @@ func TestOpenAIRequestStrictOmitsTemperature(t *testing.T) {
 	}
 }
 
+func TestStrictGatewayDuplicateUserTurns(t *testing.T) {
+	client := NewOpenAI("https://gateway.example.com/v1", "key", "model",
+		Options{MaxTokens: 8192, GatewayMode: GatewayStrict})
+	body := client.buildRequest(&Request{
+		Messages: []Message{
+			{Role: "system", Content: "sys"},
+			{Role: "user", Content: "task a"},
+			{Role: "user", Content: "task b"},
+		},
+	}, false)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	arr := m["messages"].([]interface{})
+	if len(arr) != 2 {
+		t.Fatalf("duplicate user turns should yield 2 user messages after strict merge, got %d", len(arr))
+	}
+}
+
 func TestNewProviderAnthropic(t *testing.T) {
 	p := NewProvider("anthropic", "", "key", "claude-3-5-sonnet-20241022", Options{TimeoutSec: 30, GatewayMode: GatewayOpenAI})
 	if _, ok := p.(*AnthropicClient); !ok {
