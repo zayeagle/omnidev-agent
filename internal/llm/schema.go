@@ -1,5 +1,7 @@
 package llm
 
+import "sort"
+
 // toolParametersSchema builds a JSON Schema object for OpenAI/Anthropic tool definitions.
 func toolParametersSchema(params map[string]interface{}) map[string]interface{} {
 	if params == nil {
@@ -13,11 +15,36 @@ func toolParametersSchema(params map[string]interface{}) map[string]interface{} 
 			return params
 		}
 	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": params,
-		"required":   requiredParamKeys(params),
+
+	props := make(map[string]interface{}, len(params))
+	var required []string
+	for name, raw := range params {
+		schema, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		prop := make(map[string]interface{}, len(schema))
+		for k, v := range schema {
+			if k == "required" {
+				if req, ok := v.(bool); ok && req {
+					required = append(required, name)
+				}
+				continue
+			}
+			prop[k] = v
+		}
+		props[name] = prop
 	}
+
+	sort.Strings(required)
+	out := map[string]interface{}{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		out["required"] = required
+	}
+	return out
 }
 
 func requiredParamKeys(params map[string]interface{}) []string {
@@ -31,5 +58,6 @@ func requiredParamKeys(params map[string]interface{}) []string {
 			keys = append(keys, name)
 		}
 	}
+	sort.Strings(keys)
 	return keys
 }

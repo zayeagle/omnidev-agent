@@ -95,7 +95,7 @@ func (c *OpenAIClient) buildRequest(req *Request, stream bool) openAIRequest {
 	body := openAIRequest{
 		Model:     c.model,
 		Messages:  convertMessages(msgs),
-		MaxTokens: c.opts.MaxTokens,
+		MaxTokens: effectiveMaxTokens(c.opts.MaxTokens, len(req.Tools)),
 	}
 	if !c.opts.OmitTemperature {
 		t := c.opts.Temperature
@@ -109,6 +109,15 @@ func (c *OpenAIClient) buildRequest(req *Request, stream bool) openAIRequest {
 		body.ToolChoice = "auto"
 	}
 	return body
+}
+
+// effectiveMaxTokens caps completion budget on tool-call requests. Many enterprise
+// gateways reject large max_tokens together with function tools (模型推理异常).
+func effectiveMaxTokens(configured, toolCount int) int {
+	if toolCount > 0 && configured > StrictGatewayMaxTokensCap {
+		return StrictGatewayMaxTokensCap
+	}
+	return configured
 }
 
 func (c *OpenAIClient) doRequest(ctx context.Context, body openAIRequest) (*openAIResponse, error) {

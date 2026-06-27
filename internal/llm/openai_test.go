@@ -51,6 +51,18 @@ func TestOpenAIRequestWithToolsOmitsStream(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestCapsMaxTokensWithTools(t *testing.T) {
+	client := NewOpenAI("https://api.example.com/v1", "key", "gpt-4o",
+		Options{MaxTokens: 16384, TimeoutSec: 30, GatewayMode: GatewayOpenAI})
+	body := client.buildRequest(&Request{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    []Tool{{Name: "read_file", Description: "read"}},
+	}, false)
+	if body.MaxTokens != StrictGatewayMaxTokensCap {
+		t.Fatalf("max_tokens = %d, want cap %d when tools present", body.MaxTokens, StrictGatewayMaxTokensCap)
+	}
+}
+
 func TestOpenAIMessageOmitsNullContent(t *testing.T) {
 	msg := openAIMessage{
 		Role: "assistant",
