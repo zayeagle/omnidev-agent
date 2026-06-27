@@ -16,6 +16,10 @@ type Config struct {
 	// Context window management (Cursor-style)
 	ContextMaxTokens          int     `json:"context_max_tokens"`          // 120000 default
 	ContextSummarizeThreshold float64 `json:"context_summarize_threshold"` // 0.95 default
+	// Task dispatcher (parallel sub-agents)
+	MaxParallel      int `json:"max_parallel"`        // default 2
+	SubAgentTimeout  int `json:"sub_agent_timeout"`   // seconds, default 120
+	SubAgentMaxTurns int `json:"sub_agent_max_turns"` // default 10
 }
 
 // Load is the legacy entry point used by tests and simple setups.
@@ -44,6 +48,9 @@ func Default() *Config {
 		LogDir:                     ".ai_history/sessions/", // legacy alias
 		ContextMaxTokens:           120000,
 		ContextSummarizeThreshold:  0.95,
+		MaxParallel:                2,
+		SubAgentTimeout:            120,
+		SubAgentMaxTurns:           10,
 	}
 }
 

@@ -58,6 +58,7 @@ type Agent struct {
 	cpStore              *CheckpointStore
 	mu                   sync.Mutex
 	subAgent             bool // true when this is a sub-agent (skip pipeline steps)
+	activeSubtaskID      string // task ID when running as sub-agent (for TUI labels)
 	outputDir            string // generated project workspace root
 	projectLayout        ProjectLayout
 }
@@ -82,6 +83,8 @@ func (a *Agent) SetDispatcher(d *TaskDispatcher)                 { a.dispatcher 
 func (a *Agent) SetCheckpointStore(cs *CheckpointStore) { a.cpStore = cs }
 func (a *Agent) SetStore(s *session.Store)                 { a.store = s }
 func (a *Agent) SetSubAgent(v bool)                     { a.subAgent = v }
+func (a *Agent) SetActiveSubtaskID(id string)           { a.activeSubtaskID = id }
+func (a *Agent) ActiveSubtaskID() string                { return a.activeSubtaskID }
 func (a *Agent) SetOutputDir(dir string)       { a.outputDir = dir }
 func (a *Agent) OutputDir() string             { return a.outputDir }
 func (a *Agent) SetProjectLayout(l ProjectLayout) { a.projectLayout = l }

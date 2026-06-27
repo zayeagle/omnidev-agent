@@ -53,6 +53,15 @@ func runHeadless(ctx context.Context, a *agent.Agent, sess *session.Session, sto
 		case agent.ErrorMsg:
 			fmt.Fprintf(os.Stderr, "\n✗ %s\n", truncate(m.Error, 200))
 
+		case agent.CheckpointPromptMsg:
+			fmt.Printf("\n⏸ Checkpoint: phase=%s %d/%d tasks done\n", m.Phase, m.Completed, m.Total)
+			fmt.Println("  (auto-resume — headless mode; use TUI for Y/N)")
+			select {
+			case m.Reply <- agent.CheckpointResponse{Resume: true}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
 		case agent.ConfirmRequestMsg:
 			fmt.Printf("\n⛔ Permission required: %s\n", m.Description)
 			fmt.Println("  (denied — headless mode blocks dangerous ops; use TUI or --yolo)")

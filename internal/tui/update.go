@@ -47,6 +47,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAgentMsg(msg)
 	case agent.TaskPlanMsg:
 		m.handleAgentMsg(msg)
+	case agent.CheckpointPromptMsg:
+		m.handleAgentMsg(msg)
 	case agent.AllCompleteMsg:
 		m.handleAgentMsg(msg)
 	case agent.ConfirmRequestMsg:
@@ -114,16 +116,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey processes keyboard events.
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
-	// During confirmation, only Y/N/A/Esc handled
-	if m.confirming {
+	// During confirmation or checkpoint prompt, only Y/N/A/Esc handled
+	if m.confirming || m.checkpointing {
 		switch strings.ToLower(msg.String()) {
 		case "y":
+			if m.checkpointing {
+				if m.checkpointReply != nil {
+					m.checkpointReply <- agent.CheckpointResponse{Resume: true}
+				}
+				m.checkpointing = false
+				m.checkpointReply = nil
+				return nil
+			}
 			if m.confirmReply != nil {
 				m.confirmReply <- permissions.ConfirmResponse{Granted: true, Reason: "user approved"}
 			}
 			m.confirming = false
 			m.confirmReply = nil
 		case "a":
+			if m.checkpointing {
+				return nil
+			}
 			m.agent.Permissions().SetInteractive(false)
 			if m.confirmReply != nil {
 				m.confirmReply <- permissions.ConfirmResponse{
@@ -135,6 +148,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.confirming = false
 			m.confirmReply = nil
 		case "n", "ctrl+c", "esc":
+			if m.checkpointing {
+				if m.checkpointReply != nil {
+					m.checkpointReply <- agent.CheckpointResponse{Resume: false}
+				}
+				m.checkpointing = false
+				m.checkpointReply = nil
+				return nil
+			}
 			if m.confirmReply != nil {
 				m.confirmReply <- permissions.ConfirmResponse{Granted: false, Reason: "user denied"}
 			}
@@ -360,10 +381,12 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 				ID:          item.ID,
 				Description: item.Description,
 				Status:      components.StatusPending,
+				DependsOn:   append([]string(nil), item.DependsOn...),
 			})
 		}
 		t.SetTasks(items)
 		t.StartStep(components.StepPlan)
+		t.CompleteStep(components.StepPlan, fmt.Sprintf("%d tasks", len(items)))
 
 	case agent.AllCompleteMsg:
 		t.SetCompletion(msg.Summary, msg.ProjectDir)
@@ -377,7 +400,7 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 	// ── Tool calls ──
 	case agent.ToolCallMsg:
 		t.StartStep(components.StepExec)
-		t.AddToolCall(msg.Name, toolArgsSummary(msg.Args))
+		t.AddToolCallSubtask(msg.SubtaskID, msg.Name, toolArgsSummary(msg.Args))
 
 	case agent.ToolResultMsg:
 		toolName := t.PendingToolName()
@@ -397,10 +420,11 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		case "running":
 			t.AddOrUpdateTask(msg.TaskID, desc, components.StatusRunning)
 		case "done":
-			t.AddOrUpdateTask(msg.TaskID, desc, components.StatusSuccess)
+			t.UpdateTaskStatus(msg.TaskID, components.StatusSuccess, "")
 		case "error":
-			t.AddOrUpdateTask(msg.TaskID, desc, components.StatusFailed)
+			t.UpdateTaskStatus(msg.TaskID, components.StatusFailed, desc)
 		}
+		t.RecomputeTaskBlocked()
 
 	// ── Conflict / checkpoint ──
 	case agent.ResolveConflictMsg:
@@ -409,11 +433,22 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 			t.FlushLLM("")
 		}
 
+	case agent.CheckpointPromptMsg:
+		m.checkpointing = true
+		m.checkpointPhase = msg.Phase
+		m.checkpointDone = msg.Completed
+		m.checkpointTotal = msg.Total
+		m.checkpointReply = msg.Reply
+		if t != nil {
+			t.AddStatusLine(fmt.Sprintf("Checkpoint: %d/%d tasks done (%s)", msg.Completed, msg.Total, msg.Phase))
+		}
+
 	// ── Confirmation ──
 	case agent.ConfirmRequestMsg:
 		m.confirming = true
 		m.confirmLevel = msg.Level.String()
 		m.confirmDescription = msg.Description
+		m.confirmPreview = msg.Preview
 		m.confirmReply = msg.Reply
 		m.confirmTimeout = 30
 
@@ -655,10 +690,21 @@ func handlePipelineMarker(t *components.Turn, content string) {
 	case strings.Contains(content, "Code modification mode"):
 		t.StartStep(components.StepClassify)
 		t.CompleteStep(components.StepClassify, "code change")
-	case strings.Contains(content, "Project workspace ready"):
+	case strings.Contains(content, "Legacy project detected"), strings.Contains(content, "Scanning project structure"):
+		t.StartStep(components.StepScan)
+	case strings.Contains(content, "Project analysis complete"):
+		t.CompleteStep(components.StepScan, "analysis done")
+	case strings.Contains(content, "Initializing DDD"), strings.Contains(content, "DDD structure ready"):
+		t.StartStep(components.StepScaffold)
+		t.CompleteStep(components.StepScaffold, "scaffold")
+	case strings.Contains(content, "Architecture:"):
+		t.StartStep(components.StepPlan)
+	case strings.Contains(content, "Project workspace ready"), strings.Contains(content, "Standalone project workspace"):
 		t.SetPlanSummary(content)
+		t.CompleteStep(components.StepScaffold, "workspace ready")
 	case strings.Contains(content, "[Task "):
 		parseAllTaskLines(t, content)
+		t.RecomputeTaskBlocked()
 	}
 }
 
@@ -677,6 +723,8 @@ func parseAllTaskLines(t *components.Turn, content string) {
 			status = components.StatusSuccess
 		case strings.Contains(line, "waiting:"):
 			status = components.StatusPending
+		case strings.Contains(line, "blocked:"):
+			status = components.StatusBlocked
 		default:
 			continue
 		}

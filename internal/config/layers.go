@@ -147,6 +147,21 @@ func mergeEnv(dst *Config) {
 	if v := os.Getenv("OMNIDEV_COMPAT_MODE"); v != "" {
 		dst.CompatMode = v
 	}
+	if v := os.Getenv("OMNIDEV_MAX_PARALLEL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.MaxParallel = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_SUB_AGENT_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.SubAgentTimeout = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_SUB_AGENT_MAX_TURNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.SubAgentMaxTurns = n
+		}
+	}
 }
 
 // applyNonZero copies src values to dst only when the src value is non-zero.
@@ -195,6 +210,15 @@ func applyNonZero(dst, src *Config) {
 	}
 	if src.CompatMode != "" {
 		dst.CompatMode = src.CompatMode
+	}
+	if src.MaxParallel > 0 {
+		dst.MaxParallel = src.MaxParallel
+	}
+	if src.SubAgentTimeout > 0 {
+		dst.SubAgentTimeout = src.SubAgentTimeout
+	}
+	if src.SubAgentMaxTurns > 0 {
+		dst.SubAgentMaxTurns = src.SubAgentMaxTurns
 	}
 }
 

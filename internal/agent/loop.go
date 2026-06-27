@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -258,9 +259,10 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 		allApproved := true
 		for _, tc := range toolCalls {
 			msgCh <- ToolCallMsg{
-				Name:   tc.Name,
-				Args:   tc.Arguments,
-				Status: "executing",
+				Name:      tc.Name,
+				Args:      tc.Arguments,
+				Status:    "executing",
+				SubtaskID: a.ActiveSubtaskID(),
 			}
 
 			tool, ok := a.toolbox.Get(tc.Name)
@@ -373,6 +375,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 				msgCh <- ConfirmRequestMsg{
 					Level:       tool.Level(),
 					Description: description,
+					Preview:     buildConfirmPreview(tc.Name, tc.Arguments),
 					Reply:       reply,
 				}
 
@@ -457,10 +460,11 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 	}
 
 	// Done — only the parent agent loop signals completion to the TUI.
-	if !a.subAgent {
-		if a.outputDir != "" && a.state != StateError {
-			taskCount := 1
-			msgCh <- NewAllComplete(taskCount, a.outputDir)
+	if !a.subAgent && a.state != StateError {
+		if a.outputDir != "" {
+			msgCh <- NewAllComplete(1, a.outputDir)
+		} else {
+			msgCh <- AllCompleteMsg{Summary: "Task completed."}
 		}
 		a.setState(StateDone)
 		msgCh <- AgentStateMsg{State: StateDone}
@@ -509,4 +513,67 @@ func buildToolDescription(name string, args map[string]interface{}) string {
 		}
 	}
 	return fmt.Sprintf("%s %v", name, args)
+}
+
+// buildConfirmPreview returns a short diff/snippet for the permission dialog.
+func buildConfirmPreview(name string, args map[string]interface{}) string {
+	const maxLines = 8
+	const maxLineLen = 72
+
+	truncLine := func(s string) string {
+		s = strings.TrimSpace(s)
+		if len(s) > maxLineLen {
+			return s[:maxLineLen] + "…"
+		}
+		return s
+	}
+
+	switch name {
+	case "write_file":
+		path, _ := args["path"].(string)
+		content, _ := args["content"].(string)
+		if path == "" {
+			return ""
+		}
+		var b strings.Builder
+		b.WriteString("write " + path + "\n")
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			if i >= maxLines {
+				b.WriteString(fmt.Sprintf("… +%d lines\n", len(lines)-maxLines))
+				break
+			}
+			b.WriteString("+ " + truncLine(line) + "\n")
+		}
+		return strings.TrimRight(b.String(), "\n")
+	case "edit_file":
+		path, _ := args["path"].(string)
+		oldS, _ := args["old_snippet"].(string)
+		newS, _ := args["new_snippet"].(string)
+		if path == "" {
+			return ""
+		}
+		var b strings.Builder
+		b.WriteString("edit " + path + "\n")
+		for i, line := range strings.Split(oldS, "\n") {
+			if i >= maxLines {
+				b.WriteString("…\n")
+				break
+			}
+			b.WriteString("- " + truncLine(line) + "\n")
+		}
+		for i, line := range strings.Split(newS, "\n") {
+			if i >= maxLines {
+				b.WriteString("…\n")
+				break
+			}
+			b.WriteString("+ " + truncLine(line) + "\n")
+		}
+		return strings.TrimRight(b.String(), "\n")
+	case "delete_file":
+		if path, ok := args["path"].(string); ok && path != "" {
+			return "delete " + path
+		}
+	}
+	return ""
 }

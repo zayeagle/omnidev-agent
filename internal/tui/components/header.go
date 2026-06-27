@@ -18,8 +18,10 @@ const agentCommandsHint = "/help /status /model /clear /sessions /checkpoint /yo
 
 // HeaderInfo holds build metadata shown at the top of the TUI.
 type HeaderInfo struct {
-	Version   string
-	BuildTime string
+	Version    string
+	BuildTime  string
+	AgentState string // live agent state badge (Thinking, Executing, …)
+	Model      string
 }
 
 // AgentHeader renders the top banner with width-aware wrapping.
@@ -47,6 +49,13 @@ func AgentHeaderLines(info HeaderInfo, width int) []string {
 	lines = append(lines, styledWrapLines(headerHintStyle, agentTagline, width)...)
 	lines = append(lines, styledWrapLines(headerHintStyle, "Version "+ver, width)...)
 	lines = append(lines, styledWrapLines(headerHintStyle, "Built "+buildTime, width)...)
+	if state := strings.TrimSpace(info.AgentState); state != "" && state != "Idle" {
+		badge := "Status: " + state
+		if model := strings.TrimSpace(info.Model); model != "" {
+			badge += " · " + model
+		}
+		lines = append(lines, styledWrapLines(headerHintStyle, badge, width)...)
+	}
 	lines = append(lines, styledWrapLines(headerHintStyle, "Commands: "+agentCommandsHint, width)...)
 	return lines
 }

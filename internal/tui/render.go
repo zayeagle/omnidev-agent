@@ -50,7 +50,14 @@ func (m *model) View() string {
 			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
 			b.WriteString("\n")
 		}
-		dialog := components.ConfirmDialog(w, m.confirmLevel, m.confirmDescription, m.confirmTimeout)
+		dialog := components.ConfirmDialog(w, m.confirmLevel, m.confirmDescription, m.confirmPreview, m.confirmTimeout)
+		b.WriteString(components.ConfirmOverlay(w, dialog))
+	} else if m.checkpointing {
+		if working {
+			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
+			b.WriteString("\n")
+		}
+		dialog := components.CheckpointDialog(w, m.checkpointPhase, m.checkpointDone, m.checkpointTotal)
 		b.WriteString(components.ConfirmOverlay(w, dialog))
 	} else {
 		if working {

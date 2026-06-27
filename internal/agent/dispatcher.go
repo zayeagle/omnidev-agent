@@ -55,13 +55,38 @@ type TaskDispatcher struct {
 	checkpointStore  *CheckpointStore
 }
 
+// DispatcherOptions configures parallel sub-agent execution.
+type DispatcherOptions struct {
+	MaxParallel      int
+	SubAgentTimeout  time.Duration
+	SubAgentMaxTurns int
+}
+
+// DefaultDispatcherOptions returns built-in defaults when no config is supplied.
+func DefaultDispatcherOptions() DispatcherOptions {
+	return DispatcherOptions{
+		MaxParallel:      2,
+		SubAgentTimeout:  120 * time.Second,
+		SubAgentMaxTurns: 10,
+	}
+}
+
 // NewTaskDispatcher creates a dispatcher bound to the parent agent.
-func NewTaskDispatcher(agent *Agent) *TaskDispatcher {
+func NewTaskDispatcher(agent *Agent, opts DispatcherOptions) *TaskDispatcher {
+	if opts.MaxParallel < 1 {
+		opts.MaxParallel = DefaultDispatcherOptions().MaxParallel
+	}
+	if opts.SubAgentTimeout <= 0 {
+		opts.SubAgentTimeout = DefaultDispatcherOptions().SubAgentTimeout
+	}
+	if opts.SubAgentMaxTurns < 1 {
+		opts.SubAgentMaxTurns = DefaultDispatcherOptions().SubAgentMaxTurns
+	}
 	return &TaskDispatcher{
 		agent:            agent,
-		maxParallel:      1, // enterprise gateways often reject concurrent inference requests
-		subAgentTimeout:  120 * time.Second,
-		subAgentMaxTurns: 10,
+		maxParallel:      opts.MaxParallel,
+		subAgentTimeout:  opts.SubAgentTimeout,
+		subAgentMaxTurns: opts.SubAgentMaxTurns,
 	}
 }
 
@@ -76,12 +101,25 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 	// Check for existing checkpoint (resume scenario)
 	cp, _ := d.checkpointLoad()
 	if cp != nil && cp.Phase != CheckpointDone {
-		msgCh <- ResolveConflictMsg{HasInProgress: true, LastPhase: string(cp.Phase)}
-		msgCh <- StreamChunkMsg{
-			Content: fmt.Sprintf("Found in-progress checkpoint (%s). Resume from checkpoint, or restart?", cp.Phase),
-			Done:    true,
+		reply := make(chan CheckpointResponse, 1)
+		msgCh <- CheckpointPromptMsg{
+			Phase:     string(cp.Phase),
+			Completed: len(cp.Results),
+			Total:     len(cp.Tasks),
+			Reply:     reply,
 		}
-		return d.dispatchWithCheckpoint(ctx, instruction, cp, msgCh)
+		var resume bool
+		select {
+		case resp := <-reply:
+			resume = resp.Resume
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+		if resume {
+			msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(cp.Tasks)}
+			return d.dispatchWithCheckpoint(ctx, instruction, cp, msgCh)
+		}
+		d.checkpointClear()
 	}
 
 	// Fresh start: decompose then execute
@@ -315,6 +353,9 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 	timeoutCtx, cancel := context.WithTimeout(ctx, d.subAgentTimeout)
 	defer cancel()
 
+	subAgent.SetActiveSubtaskID(task.ID)
+	defer subAgent.SetActiveSubtaskID("")
+
 	err := subAgent.RunLoop(timeoutCtx, task.Description, msgCh)
 
 	result := TaskResult{TaskID: task.ID}
@@ -365,7 +406,11 @@ func (d *TaskDispatcher) mergeResults(results []TaskResult, msgCh chan<- tea.Msg
 func tasksToPlanItems(tasks []Task) []TaskPlanItem {
 	items := make([]TaskPlanItem, len(tasks))
 	for i, t := range tasks {
-		items[i] = TaskPlanItem{ID: t.ID, Description: t.Description}
+		items[i] = TaskPlanItem{
+			ID:          t.ID,
+			Description: t.Description,
+			DependsOn:   append([]string(nil), t.DependsOn...),
+		}
 	}
 	return items
 }

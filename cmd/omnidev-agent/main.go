@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/zayeagle/omnidev-agent/internal/agent"
 	"github.com/zayeagle/omnidev-agent/internal/config"
@@ -78,7 +79,11 @@ func main() {
 	complexityClassifier := agent.NewComplexityClassifier(provider)
 	a.SetComplexityClassifier(complexityClassifier)
 
-	dispatcher := agent.NewTaskDispatcher(a)
+	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
+		MaxParallel:      cfg.MaxParallel,
+		SubAgentTimeout:  time.Duration(cfg.SubAgentTimeout) * time.Second,
+		SubAgentMaxTurns: cfg.SubAgentMaxTurns,
+	})
 	dispatcher.SetCheckpointStore(cpStore)
 	a.SetDispatcher(dispatcher)
 

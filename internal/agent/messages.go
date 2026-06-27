@@ -30,9 +30,10 @@ type StreamChunkMsg struct {
 
 // ToolCallMsg notifies the TUI that a tool is being invoked.
 type ToolCallMsg struct {
-	Name   string
-	Args   map[string]interface{}
-	Status string // "executing" | "awaiting_approval"
+	Name      string
+	Args      map[string]interface{}
+	Status    string // "executing" | "awaiting_approval"
+	SubtaskID string // non-empty when invoked by a parallel sub-agent
 }
 
 // ToolResultMsg carries the result of a completed tool execution.
@@ -47,7 +48,21 @@ type ToolResultMsg struct {
 type ConfirmRequestMsg struct {
 	Level       permissions.Level
 	Description string
+	Preview     string // optional diff/snippet for write/edit/delete
 	Reply       chan<- permissions.ConfirmResponse
+}
+
+// CheckpointPromptMsg asks whether to resume an in-progress checkpoint.
+type CheckpointPromptMsg struct {
+	Phase     string
+	Completed int
+	Total     int
+	Reply     chan<- CheckpointResponse
+}
+
+// CheckpointResponse is the user's decision on checkpoint resume.
+type CheckpointResponse struct {
+	Resume bool // true = resume, false = start fresh
 }
 
 // ErrorMsg notifies the TUI of a recoverable error.
@@ -63,6 +78,7 @@ type DoneMsg struct{}
 type TaskPlanItem struct {
 	ID          string
 	Description string
+	DependsOn   []string
 }
 
 // TaskPlanMsg sends the full decomposed task list to the TUI at once.

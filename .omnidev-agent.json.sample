@@ -9,5 +9,8 @@
   "timeout":     120,
   "max_turns":   20,
   "log_level":   "info",
-  "session_dir": ".ai_history/sessions/"
+  "session_dir": ".ai_history/sessions/",
+  "max_parallel": 2,
+  "sub_agent_timeout": 120,
+  "sub_agent_max_turns": 10
 }

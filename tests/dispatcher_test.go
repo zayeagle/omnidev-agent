@@ -36,7 +36,7 @@ func TestDispatcherSimpleDecomposition(t *testing.T) {
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
 
-	dispatcher := agent.NewTaskDispatcher(a)
+	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -69,7 +69,7 @@ func TestDispatcherSingleTaskHandled(t *testing.T) {
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
 
-	dispatcher := agent.NewTaskDispatcher(a)
+	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -99,7 +99,7 @@ func TestDispatcherPlanParsing(t *testing.T) {
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
 
-	dispatcher := agent.NewTaskDispatcher(a)
+	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

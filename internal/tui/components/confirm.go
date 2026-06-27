@@ -21,7 +21,7 @@ var (
 const ConfirmDialogHeight = 8
 
 // ConfirmDialog renders a permission approval overlay, centered for the given width.
-func ConfirmDialog(width int, level, description string, remainingSec int) string {
+func ConfirmDialog(width int, level, description, preview string, remainingSec int) string {
 	if width < 40 {
 		width = 40
 	}
@@ -44,6 +44,15 @@ func ConfirmDialog(width int, level, description string, remainingSec int) strin
 		}
 		content.WriteString(confirmDescStyle.Render(prefix+line) + "\n")
 	}
+	if strings.TrimSpace(preview) != "" {
+		content.WriteString("\n")
+		content.WriteString(confirmDescStyle.Render("  Preview:") + "\n")
+		for _, line := range strings.Split(preview, "\n") {
+			for _, wl := range WrapDisplayWidth(line, innerW-4) {
+				content.WriteString(confirmDescStyle.Render("    "+wl) + "\n")
+			}
+		}
+	}
 	content.WriteString("\n")
 
 	content.WriteString("  ")
@@ -58,6 +67,28 @@ func ConfirmDialog(width int, level, description string, remainingSec int) strin
 		content.WriteString(confirmDescStyle.Render(fmt.Sprintf("  (auto-deny in %ds)", remainingSec)))
 	}
 
+	dialog := confirmBorder.Render(content.String())
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
+}
+
+// CheckpointDialog renders resume-or-restart prompt for in-progress checkpoints.
+func CheckpointDialog(width int, phase string, completed, total int) string {
+	if width < 40 {
+		width = 40
+	}
+	innerW := width - 8
+	if innerW < 28 {
+		innerW = 28
+	}
+	var content strings.Builder
+	content.WriteString(confirmTitleStyle.Render("⏸ Checkpoint Found") + "\n\n")
+	msg := fmt.Sprintf("  Phase: %s — %d/%d tasks done", phase, completed, total)
+	content.WriteString(confirmDescStyle.Render(msg) + "\n\n")
+	content.WriteString("  ")
+	content.WriteString(confirmApproveKey.Render("[Y] Resume"))
+	content.WriteString(confirmDescStyle.Render("   "))
+	content.WriteString(confirmDenyKey.Render("[N] Start fresh"))
+	content.WriteString("\n")
 	dialog := confirmBorder.Render(content.String())
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
 }

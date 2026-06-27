@@ -112,6 +112,7 @@ func (s ItemStatus) Icon() string {
 type ToolEntry struct {
 	Name      string
 	Args      string
+	SubtaskID string
 	Status    ItemStatus
 	Summary   string
 	Error     string
@@ -265,9 +266,14 @@ func (t *Turn) FlushLLM(text string) {
 }
 
 func (t *Turn) AddToolCall(name, args string) *ToolEntry {
+	return t.AddToolCallSubtask("", name, args)
+}
+
+func (t *Turn) AddToolCallSubtask(subtaskID, name, args string) *ToolEntry {
 	te := &ToolEntry{
 		Name:      name,
 		Args:      args,
+		SubtaskID: subtaskID,
 		Status:    StatusRunning,
 		startedAt: time.Now(),
 	}
@@ -294,7 +300,39 @@ func (t *Turn) CompleteToolCall(name string, success bool, output string) {
 	}
 }
 
-func (t *Turn) SetTasks(tasks []*TaskEntry) { t.Tasks = tasks }
+func (t *Turn) SetTasks(tasks []*TaskEntry) {
+	t.Tasks = tasks
+	t.RecomputeTaskBlocked()
+}
+
+func (t *Turn) RecomputeTaskBlocked() {
+	if len(t.Tasks) == 0 {
+		return
+	}
+	done := make(map[string]bool, len(t.Tasks))
+	for _, tk := range t.Tasks {
+		if tk.Status == StatusSuccess {
+			done[tk.ID] = true
+		}
+	}
+	for _, tk := range t.Tasks {
+		if tk.Status == StatusRunning || tk.Status == StatusSuccess || tk.Status == StatusFailed {
+			continue
+		}
+		blocked := false
+		for _, dep := range tk.DependsOn {
+			if !done[dep] {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			tk.Status = StatusBlocked
+		} else if tk.Status == StatusBlocked {
+			tk.Status = StatusPending
+		}
+	}
+}
 
 func (t *Turn) AddOrUpdateTask(id, description string, status ItemStatus) {
 	for _, tk := range t.Tasks {
@@ -303,10 +341,12 @@ func (t *Turn) AddOrUpdateTask(id, description string, status ItemStatus) {
 			if description != "" {
 				tk.Description = description
 			}
+			t.RecomputeTaskBlocked()
 			return
 		}
 	}
 	t.Tasks = append(t.Tasks, &TaskEntry{ID: id, Description: description, Status: status})
+	t.RecomputeTaskBlocked()
 }
 
 func (t *Turn) UpdateTaskStatus(id string, status ItemStatus, result string) {
@@ -316,6 +356,7 @@ func (t *Turn) UpdateTaskStatus(id string, status ItemStatus, result string) {
 			if result != "" {
 				tk.Result = result
 			}
+			t.RecomputeTaskBlocked()
 			return
 		}
 	}
@@ -600,10 +641,11 @@ func (tl *TurnList) buildAllLines() []string {
 
 // TaskPanelLines renders the sticky To-dos panel for a turn.
 func TaskPanelLines(t *Turn, width int) []string {
-	if t == nil || len(t.Tasks) == 0 {
+	if t == nil || len(t.Tasks) == 0 || t.HasCompletion() {
 		return nil
 	}
-	return RenderTodoList(t.Tasks, width)
+	collapse := t.FinalStatus == TurnDone && !t.IsActive()
+	return RenderTodoList(t.Tasks, width, collapse)
 }
 
 // View renders the scrollable transcript. Pass pinTasksTurn when its task box
@@ -683,7 +725,7 @@ var (
 	turnThinkLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 )
 
-const thinkPreviewLines = 3 // used by tests / future preview mode
+const thinkPreviewLines = 0 // collapsed = header only (one line)
 
 func (t *Turn) render(width int, skipTasks bool) []string {
 	if width < 40 {
@@ -697,6 +739,10 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 	}
 	lines = append(lines, "")
 
+	if len(t.Steps) > 0 {
+		lines = append(lines, t.renderPipelineSteps(cw)...)
+	}
+
 	if len(t.statusLines) > 0 {
 		for _, sl := range t.statusLines {
 			for _, wl := range wrapLine(sl, cw) {
@@ -706,8 +752,9 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 		}
 	}
 
-	if !skipTasks && len(t.Tasks) > 0 {
-		lines = append(lines, RenderTodoList(t.Tasks, width)...)
+	if !skipTasks && len(t.Tasks) > 0 && !t.HasCompletion() {
+		collapse := t.FinalStatus == TurnDone
+		lines = append(lines, RenderTodoList(t.Tasks, width, collapse)...)
 	}
 
 	if t.llmOutput.Len() > 0 && !t.chatMode && !t.HasCompletion() {
@@ -762,6 +809,9 @@ func (t *Turn) renderToolCalls(cw int) []string {
 			icon, style = "○", turnPendingStyle
 		}
 		head := fmt.Sprintf("  %s %s", icon, tc.Name)
+		if tc.SubtaskID != "" {
+			head = fmt.Sprintf("  %s [task %s] %s", icon, tc.SubtaskID, tc.Name)
+		}
 		if tc.Args != "" {
 			head += " " + tc.Args
 		}
@@ -807,20 +857,51 @@ func (t *Turn) renderThinking(cw int) []string {
 		}
 	} else {
 		lines = append(lines, turnThinkLabel.Render(fmt.Sprintf("  > Thinking (%d lines)  Tab/Enter to expand", lineCount)))
-		preview := thinkPreviewLines
-		if lineCount < preview {
-			preview = lineCount
-		}
-		for i := 0; i < preview; i++ {
-			for _, wl := range wrapLine(allThinkLines[i], cw) {
-				lines = append(lines, turnAssistStyle.Render(wl))
+		if thinkPreviewLines > 0 {
+			preview := thinkPreviewLines
+			if lineCount < preview {
+				preview = lineCount
 			}
-		}
-		if lineCount > preview {
-			lines = append(lines, turnThinkLabel.Render(fmt.Sprintf("    … %d more lines", lineCount-preview)))
+			for i := 0; i < preview; i++ {
+				for _, wl := range wrapLine(allThinkLines[i], cw) {
+					lines = append(lines, turnAssistStyle.Render(wl))
+				}
+			}
+			if lineCount > preview {
+				lines = append(lines, turnThinkLabel.Render(fmt.Sprintf("    … %d more lines", lineCount-preview)))
+			}
 		}
 	}
 	lines = append(lines, "")
+	return lines
+}
+
+func (t *Turn) renderPipelineSteps(cw int) []string {
+	var lines []string
+	for _, s := range t.Steps {
+		var icon string
+		var style lipgloss.Style
+		switch s.Status {
+		case StatusSuccess:
+			icon, style = "✓", turnStepOKStyle
+		case StatusFailed:
+			icon, style = "✗", turnStepErrStyle
+		case StatusRunning:
+			icon, style = "◌", turnStepRunStyle
+		default:
+			icon, style = "○", turnPendingStyle
+		}
+		label := fmt.Sprintf("  %s %s %s", icon, s.Type.Icon(), s.Type.Label())
+		if s.summary != "" && s.Status != StatusRunning {
+			label += " — " + truncateStr(s.summary, 40)
+		}
+		for _, wl := range wrapLine(label, cw) {
+			lines = append(lines, style.Render(wl))
+		}
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+	}
 	return lines
 }
 

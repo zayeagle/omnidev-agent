@@ -92,6 +92,15 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.MaxTurns != 20 {
 		t.Errorf("expected default maxTurns 20, got %d", cfg.MaxTurns)
 	}
+	if cfg.MaxParallel != 2 {
+		t.Errorf("expected default max_parallel 2, got %d", cfg.MaxParallel)
+	}
+	if cfg.SubAgentTimeout != 120 {
+		t.Errorf("expected default sub_agent_timeout 120, got %d", cfg.SubAgentTimeout)
+	}
+	if cfg.SubAgentMaxTurns != 10 {
+		t.Errorf("expected default sub_agent_max_turns 10, got %d", cfg.SubAgentMaxTurns)
+	}
 }
 
 // TestConfigMustMatchProvider validates provider name normalization.

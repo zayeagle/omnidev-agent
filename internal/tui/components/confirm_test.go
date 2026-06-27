@@ -9,7 +9,7 @@ import (
 
 func TestConfirmDialogDoesNotExceedTerminalWidth(t *testing.T) {
 	const termW = 100
-	dialog := ConfirmDialog(termW, "dangerous", "write_file: deliverables/snake-game/index.html", 30)
+	dialog := ConfirmDialog(termW, "dangerous", "write_file: deliverables/snake-game/index.html", "", 30)
 	if lipgloss.Width(dialog) > termW {
 		t.Fatalf("dialog width %d exceeds terminal %d", lipgloss.Width(dialog), termW)
 	}
@@ -20,7 +20,7 @@ func TestConfirmDialogDoesNotExceedTerminalWidth(t *testing.T) {
 
 func TestConfirmOverlayDoesNotStretchBorder(t *testing.T) {
 	const termW = 100
-	dialog := ConfirmDialog(termW, "dangerous", "write_file: test.go", 30)
+	dialog := ConfirmDialog(termW, "dangerous", "write_file: test.go", "+ package main\n", 30)
 	overlay := ConfirmOverlay(termW, dialog)
 	for _, line := range strings.Split(overlay, "\n") {
 		if lipgloss.Width(line) > termW {

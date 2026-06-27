@@ -32,8 +32,16 @@ type model struct {
 	confirming         bool
 	confirmLevel       string
 	confirmDescription string
+	confirmPreview     string
 	confirmReply       chan<- permissions.ConfirmResponse
 	confirmTimeout     int
+
+	// Checkpoint resume prompt
+	checkpointing      bool
+	checkpointPhase    string
+	checkpointDone     int
+	checkpointTotal    int
+	checkpointReply    chan<- agent.CheckpointResponse
 
 	// Agent message channel (for continued reading)
 	agentCh <-chan tea.Msg
@@ -59,7 +67,16 @@ func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard,
 }
 
 func (m *model) headerInfo() components.HeaderInfo {
-	return components.HeaderInfo{Version: m.version, BuildTime: m.buildTime}
+	modelName := m.cfg.Model
+	if modelName == "" {
+		modelName = "Auto"
+	}
+	return components.HeaderInfo{
+		Version:    m.version,
+		BuildTime:  m.buildTime,
+		AgentState: m.agentState,
+		Model:      modelName,
+	}
 }
 
 // Init is called once when the program starts.
@@ -113,10 +130,10 @@ func (m *model) footerExtra() string {
 // pinTasksTurn returns the active turn whose task list is pinned above the scroll area.
 func (m *model) pinTasksTurn() *components.Turn {
 	t := m.currentTurn()
-	if t == nil || len(t.Tasks) == 0 {
+	if t == nil || len(t.Tasks) == 0 || t.HasCompletion() {
 		return nil
 	}
-	if m.isWorking() || t.HasCompletion() || t.FinalStatus == components.TurnDone {
+	if m.isWorking() || t.FinalStatus == components.TurnDone {
 		return t
 	}
 	return nil
@@ -128,6 +145,11 @@ func (m *model) contentViewportHeight() int {
 	}
 	reserved := m.headerLineCount() + 2
 	if m.confirming {
+		reserved += components.ConfirmDialogHeight
+		if m.isWorking() {
+			reserved += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), effectiveWidth(m.width)))
+		}
+	} else if m.checkpointing {
 		reserved += components.ConfirmDialogHeight
 		if m.isWorking() {
 			reserved += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), effectiveWidth(m.width)))

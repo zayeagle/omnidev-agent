@@ -14,12 +14,9 @@ import (
 func runTUI(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard) {
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
-		// NOTE: Do NOT use WithMouseCellMotion — it blocks native terminal
-		// select-copy-paste, which is the user's primary clipboard workflow.
-		//
-		// NOTE: Do NOT use WithInputTTY() on WSL — opening /dev/tty directly
-		// bypasses the PTY chain and breaks CJK IME input. Bubbletea's default
-		// Stdin mode walks the full PTY and works correctly for all locales.
+	}
+	if os.Getenv("OMNIDEV_MOUSE_SCROLL") == "1" {
+		opts = append(opts, tea.WithMouseCellMotion())
 	}
 
 	p := tea.NewProgram(tui.New(a, cfg, guard, appVersion, buildTime), opts...)
