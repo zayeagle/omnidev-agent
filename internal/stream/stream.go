@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zayeagle/omnidev-agent/internal/llm"
@@ -27,6 +28,10 @@ func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request) (*l
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
+		// Client errors (4xx) won't succeed on retry.
+		if isNonRetryableLLMError(err) {
+			return nil, err
+		}
 
 		if i < maxRetries {
 			select {
@@ -37,6 +42,18 @@ func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request) (*l
 		}
 	}
 	return nil, fmt.Errorf("llm: failed after %d retries: %w", maxRetries+1, lastErr)
+}
+
+func isNonRetryableLLMError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "llm: 400") ||
+		strings.Contains(msg, "llm: 401") ||
+		strings.Contains(msg, "llm: 403") ||
+		strings.Contains(msg, "llm: 404") ||
+		strings.Contains(msg, "openai: 400") ||
+		strings.Contains(msg, "openai: 401") ||
+		strings.Contains(msg, "openai: 403") ||
+		strings.Contains(msg, "openai: 404")
 }
 
 // SSEParser holds state for parsing Server-Sent Events chunks.

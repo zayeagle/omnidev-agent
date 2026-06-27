@@ -42,7 +42,7 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 
 	// Sub-agents: skip pipeline, go straight to standard loop
 	if a.subAgent {
-		return a.standardLoop(ctx, msgCh)
+		return a.standardLoop(ctx, msgCh, true)
 	}
 
 	// ── PIPELINE (parent agent only) ──
@@ -55,7 +55,7 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 			Content: "Conversation mode — responding directly.",
 			Done:    true,
 		}
-		return a.standardLoop(ctx, msgCh)
+		return a.standardLoop(ctx, msgCh, false)
 	}
 
 	// 3. Project Assessment (code modification confirmed)
@@ -135,7 +135,7 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 
 	// 5. Standard loop fallback
 	a.session.AddWithState("system", "Falling back to sequential execution.", StateThinking.String(), 0)
-	return a.standardLoop(ctx, msgCh)
+	return a.standardLoop(ctx, msgCh, true)
 }
 
 // classifyIntent runs an inexpensive LLM call to determine whether the user
@@ -187,7 +187,8 @@ func (a *Agent) finalizeNewProjectWorkspace(ctx context.Context, projDir, instru
 
 // standardLoop is the sequential LLM reasoning loop — used by sub-agents
 // and as a fallback when decomposition fails.
-func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg) error {
+// includeTools=false for conversation-only turns (some gateways reject tool schemas).
+func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTools bool) error {
 	consecutiveRejects := 0
 
 	for turn := 0; turn < a.maxTurns; turn++ {
@@ -204,12 +205,12 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg) error {
 		msgCh <- AgentStateMsg{State: StateThinking}
 
 		messages := a.buildMessages()
-		toolDefs := a.buildToolDefs()
+		req := &llm.Request{Messages: messages}
+		if includeTools {
+			req.Tools = a.buildToolDefs()
+		}
 
-		resp, err := stream.ChatWithRetry(ctx, a.provider, &llm.Request{
-			Messages: messages,
-			Tools:    toolDefs,
-		}, func(part string) {
+		resp, err := stream.ChatWithRetry(ctx, a.provider, req, func(part string) {
 			msgCh <- StreamChunkMsg{Content: part, Done: false}
 		})
 		if err != nil {

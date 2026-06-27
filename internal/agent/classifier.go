@@ -43,6 +43,9 @@ func (c *Classifier) Classify(ctx context.Context, instruction string) IntentCla
 		Messages: messages,
 	})
 	if err != nil {
+		if looksLikeSimpleChat(instruction) {
+			return IntentChat
+		}
 		return IntentCodeMod
 	}
 
@@ -51,4 +54,25 @@ func (c *Classifier) Classify(ctx context.Context, instruction string) IntentCla
 		return IntentChat
 	}
 	return IntentCodeMod
+}
+
+// looksLikeSimpleChat detects short conversational input when the classifier LLM is unavailable.
+func looksLikeSimpleChat(instruction string) bool {
+	s := strings.TrimSpace(instruction)
+	if s == "" || len([]rune(s)) > 120 {
+		return false
+	}
+	lower := strings.ToLower(s)
+	codeHints := []string{
+		"fix", "implement", "create", "delete", "refactor", "debug", "build", "write",
+		"file", "code", "function", "class", "module", "test", "deploy",
+		".go", ".ts", ".py", ".js", ".java", ".rs",
+		"实现", "修改", "创建", "删除", "重构", "调试", "文件", "函数", "代码",
+	}
+	for _, hint := range codeHints {
+		if strings.Contains(lower, hint) {
+			return false
+		}
+	}
+	return true
 }
