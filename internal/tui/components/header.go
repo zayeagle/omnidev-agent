@@ -1,7 +1,6 @@
 package components
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -23,30 +22,55 @@ type HeaderInfo struct {
 	BuildTime string
 }
 
-// AgentHeader renders the fixed top banner (name, intro, version, build time, commands).
-func AgentHeader(info HeaderInfo) string {
+// AgentHeader renders the top banner with width-aware wrapping.
+func AgentHeader(info HeaderInfo, width int) string {
+	lines := AgentHeaderLines(info, width)
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// AgentHeaderLines returns styled header lines for layout height calculation.
+func AgentHeaderLines(info HeaderInfo, width int) []string {
+	if width < 20 {
+		width = 80
+	}
 	ver := version.Display(info.Version)
 	buildTime := strings.TrimSpace(info.BuildTime)
 	if buildTime == "" {
 		buildTime = "unknown"
 	}
 
-	var b strings.Builder
-	b.WriteString(headerTitleStyle.Render("omnidev-agent"))
-	b.WriteByte('\n')
-	b.WriteString(headerHintStyle.Render(agentTagline))
-	b.WriteByte('\n')
-	b.WriteString(headerHintStyle.Render("Version "+ver))
-	b.WriteByte('\n')
-	b.WriteString(headerHintStyle.Render("Built "+buildTime))
-	b.WriteByte('\n')
-	b.WriteString(headerHintStyle.Render("Commands: " + agentCommandsHint))
-	b.WriteByte('\n')
-	return b.String()
+	var lines []string
+	lines = append(lines, styledWrapLines(headerTitleStyle, "omnidev-agent", width)...)
+	lines = append(lines, styledWrapLines(headerHintStyle, agentTagline, width)...)
+	lines = append(lines, styledWrapLines(headerHintStyle, "Version "+ver, width)...)
+	lines = append(lines, styledWrapLines(headerHintStyle, "Built "+buildTime, width)...)
+	lines = append(lines, styledWrapLines(headerHintStyle, "Commands: "+agentCommandsHint, width)...)
+	return lines
 }
 
-// HeaderLineCount is the number of terminal rows reserved for AgentHeader.
-func HeaderLineCount() int { return 5 }
+// HeaderLineCount returns how many terminal rows the header occupies at width.
+func HeaderLineCount(info HeaderInfo, width int) int {
+	n := len(AgentHeaderLines(info, width))
+	if n == 0 {
+		return 1
+	}
+	return n
+}
+
+func styledWrapLines(style lipgloss.Style, text string, width int) []string {
+	wrapped := WrapDisplayWidth(text, width)
+	if len(wrapped) == 0 {
+		return nil
+	}
+	out := make([]string, len(wrapped))
+	for i, line := range wrapped {
+		out[i] = style.Render(line)
+	}
+	return out
+}
 
 // FormatBuildTime normalizes build timestamps for display.
 func FormatBuildTime(raw string) string {
@@ -59,5 +83,5 @@ func FormatBuildTime(raw string) string {
 
 // HeaderInfoLabel returns a one-line summary for --version style output.
 func HeaderInfoLabel(info HeaderInfo) string {
-	return fmt.Sprintf("%s built %s", version.Display(info.Version), FormatBuildTime(info.BuildTime))
+	return version.Display(info.Version) + " built " + FormatBuildTime(info.BuildTime)
 }

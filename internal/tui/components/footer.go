@@ -2,29 +2,37 @@ package components
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
-	footerModelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
-	footerSepStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#4B5563"))
-	footerPctStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
 )
 
-// FooterBar renders: model · context% · optional hints
-func FooterBar(modelName string, contextPct float64, scrollHint, extra string) string {
-	pctStr := formatContextPct(contextPct)
-	line := footerModelStyle.Render(modelName) +
-		footerSepStyle.Render(" · ") +
-		footerPctStyle.Render(pctStr)
+// FooterBar renders model · context% · hints, wrapped to terminal width.
+func FooterBar(width int, modelName string, contextPct float64, scrollHint, extra string) string {
+	if width < 20 {
+		width = 80
+	}
+	parts := []string{modelName, formatContextPct(contextPct)}
 	if scrollHint != "" {
-		line += footerSepStyle.Render(" · ") + footerPctStyle.Render(scrollHint)
+		parts = append(parts, scrollHint)
 	}
 	if extra != "" {
-		line += footerSepStyle.Render(" · ") + footerPctStyle.Render(extra)
+		parts = append(parts, extra)
 	}
-	return line
+	plain := strings.Join(parts, " · ")
+	lines := WrapDisplayWidth(plain, width)
+	if len(lines) == 0 {
+		return ""
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = footerStyle.Render(line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func formatContextPct(pct float64) string {

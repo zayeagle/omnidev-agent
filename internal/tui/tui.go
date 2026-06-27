@@ -126,19 +126,14 @@ func (m *model) contentViewportHeight() int {
 	if h < 10 {
 		h = 24
 	}
-	headerRows := 3
-	if m.turns.Count() > 0 {
-		headerRows = 1
-	}
-	reserved := headerRows + 4
-	if m.isWorking() {
-		reserved++
-	}
+	reserved := m.headerLineCount() + 2
 	if m.confirming {
-		reserved = headerRows + 1 + components.ConfirmDialogHeight
+		reserved += components.ConfirmDialogHeight
 		if m.isWorking() {
-			reserved++
+			reserved += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), effectiveWidth(m.width)))
 		}
+	} else {
+		reserved += m.chromeLineCount(m.isWorking())
 	}
 	msgHeight := h - reserved
 	if msgHeight < 3 {
@@ -151,10 +146,7 @@ func (m *model) contentViewportHeight() int {
 func (m *model) transcriptViewportHeight() int {
 	h := m.contentViewportHeight()
 	if pin := m.pinTasksTurn(); pin != nil {
-		w := m.width
-		if w < 20 {
-			w = 80
-		}
+		w := effectiveWidth(m.width)
 		sticky := len(components.TaskPanelLines(pin, w)) + 1
 		h -= sticky
 		if h < 3 {

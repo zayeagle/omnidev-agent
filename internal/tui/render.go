@@ -12,10 +12,7 @@ func (m *model) View() string {
 		return "Goodbye!\n"
 	}
 
-	w := m.width
-	if w < 20 {
-		w = 80
-	}
+	w := effectiveWidth(m.width)
 	h := m.height
 	if h < 10 {
 		h = 24
@@ -30,25 +27,7 @@ func (m *model) View() string {
 
 	var b strings.Builder
 
-	info := m.headerInfo()
-	headerRows := components.HeaderLineCount()
-	b.WriteString(components.AgentHeader(info))
-
-	// Reserve: header + working(0-1) + input(1) + footer(1) + gaps(2)
-	reserved := headerRows + 4
-	if m.isWorking() {
-		reserved++
-	}
-	if m.confirming {
-		reserved = headerRows + 1 + components.ConfirmDialogHeight
-		if m.isWorking() {
-			reserved++
-		}
-	}
-	msgHeight := h - reserved
-	if msgHeight < 3 {
-		msgHeight = 3
-	}
+	b.WriteString(components.AgentHeader(m.headerInfo(), w))
 
 	if m.turns.Count() > 0 {
 		pinTasks := m.pinTasksTurn()
@@ -68,22 +47,23 @@ func (m *model) View() string {
 	working := m.isWorking()
 	if m.confirming {
 		if working {
-			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel()))
+			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
 			b.WriteString("\n")
 		}
 		dialog := components.ConfirmDialog(w, m.confirmLevel, m.confirmDescription, m.confirmTimeout)
 		b.WriteString(components.ConfirmOverlay(w, dialog))
 	} else {
 		if working {
-			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel()))
+			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
 			b.WriteString("\n")
 		}
 		if cp := components.CompletionPanelLines(m.currentTurn(), w); len(cp) > 0 {
 			b.WriteString(strings.Join(cp, "\n"))
 		}
-		b.WriteString(m.input.View(working, m.turns.Count() > 0))
+		b.WriteString(m.input.View(working, m.turns.Count() > 0, w))
 		b.WriteString("\n")
 		b.WriteString(components.FooterBar(
+			w,
 			modelName,
 			contextUsagePct(m.agent),
 			m.turns.ScrollHint(m.transcriptViewportHeight()),
@@ -91,5 +71,6 @@ func (m *model) View() string {
 		))
 	}
 
+	_ = h // height drives transcriptViewportHeight via layout helpers
 	return b.String()
 }

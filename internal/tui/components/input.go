@@ -1,7 +1,10 @@
 package components
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 var (
@@ -96,8 +99,16 @@ func (il *InputLine) HistNext() {
 	}
 }
 
-func (il *InputLine) View(disabled, hasTurns bool) string {
+func (il *InputLine) View(disabled, hasTurns bool, width int) string {
+	if width < 20 {
+		width = 80
+	}
 	prompt := inputPromptStyle.Render("\u2192 ")
+	promptWidth := runewidth.StringWidth("→ ")
+	contentWidth := width - promptWidth
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
 
 	if len(il.text) == 0 {
 		placeholder := "Type a message and press Enter"
@@ -107,22 +118,53 @@ func (il *InputLine) View(disabled, hasTurns bool) string {
 		if disabled {
 			placeholder = "Agent working…"
 		}
-		return prompt + inputPlaceholderStyle.Render(placeholder)
+		return renderInputLines(prompt, promptWidth, WrapDisplayWidth(placeholder, contentWidth), func(line string) string {
+			return inputPlaceholderStyle.Render(line)
+		})
 	}
+
+	full := string(il.text)
 	if disabled {
-		return prompt + inputPlaceholderStyle.Render(string(il.text))
+		return renderInputLines(prompt, promptWidth, WrapDisplayWidth(full, contentWidth), func(line string) string {
+			return inputPlaceholderStyle.Render(line)
+		})
 	}
 
 	before := string(il.text[:il.cursor])
-
-	at := ""
 	after := ""
 	if il.cursor < len(il.text) {
-		at = inputCursorStyle.Render(string(il.text[il.cursor]))
 		after = string(il.text[il.cursor+1:])
-	} else {
-		at = inputCursorStyle.Render(" ")
 	}
+	cur := " "
+	marker := "\x00"
+	var plain string
+	if il.cursor < len(il.text) {
+		cur = string(il.text[il.cursor])
+		plain = before + marker + after
+	} else {
+		plain = before + marker
+	}
+	lines := WrapDisplayWidth(plain, contentWidth)
+	return renderInputLines(prompt, promptWidth, lines, func(line string) string {
+		if !strings.Contains(line, marker) {
+			return line
+		}
+		parts := strings.SplitN(line, marker, 2)
+		if len(parts) == 2 {
+			return parts[0] + inputCursorStyle.Render(cur) + parts[1]
+		}
+		return parts[0] + inputCursorStyle.Render(cur)
+	})
+}
 
-	return prompt + before + at + after
+func renderInputLines(prompt string, promptWidth int, lines []string, styleFn func(string) string) string {
+	if len(lines) == 0 {
+		return prompt
+	}
+	out := make([]string, len(lines))
+	out[0] = prompt + styleFn(lines[0])
+	for i := 1; i < len(lines); i++ {
+		out[i] = strings.Repeat(" ", promptWidth) + styleFn(lines[i])
+	}
+	return strings.Join(out, "\n")
 }

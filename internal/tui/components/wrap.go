@@ -3,6 +3,7 @@ package components
 import (
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -68,4 +69,20 @@ func cutDisplayWidth(s string, width int) int {
 		w += rw
 	}
 	return len(s)
+}
+
+// RenderWrapped applies style to text wrapped to the given display width.
+func RenderWrapped(style lipgloss.Style, text string, width int) string {
+	if width <= 0 {
+		return style.Render(text)
+	}
+	lines := WrapDisplayWidth(text, width)
+	if len(lines) == 0 {
+		return ""
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = style.Render(line)
+	}
+	return strings.Join(out, "\n")
 }
