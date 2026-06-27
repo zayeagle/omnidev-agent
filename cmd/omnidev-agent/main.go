@@ -17,13 +17,16 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/tools"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	buildTime = "unknown"
+)
 
 func main() {
 	flags := parseFlags()
 
 	if flags.version {
-		fmt.Printf("omnidev-agent version %s  go%s/%s\n", version, runtime.Version(), runtime.GOARCH)
+		fmt.Printf("omnidev-agent version %s  built %s  go%s/%s\n", version, buildTime, runtime.Version(), runtime.GOARCH)
 		os.Exit(0)
 	}
 

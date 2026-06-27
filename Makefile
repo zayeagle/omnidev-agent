@@ -5,7 +5,8 @@ GO      := /usr/local/go/bin/go
 BIN_DIR := bin
 SRC     := ./cmd/omnidev-agent
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -X main.version=$(VERSION)
+BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+LDFLAGS := -X main.version=$(VERSION) -X 'main.buildTime=$(BUILD_TIME)'
 
 # Install destination
 PREFIX         ?= $(HOME)/.local

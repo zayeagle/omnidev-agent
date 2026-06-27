@@ -11,7 +11,13 @@ Write-Host "Module: github.com/zayeagle/omnidev-agent" -ForegroundColor Cyan
 
 # ── Build ──
 Write-Host "`nBuilding..." -ForegroundColor Yellow
-go build -o bin/omnidev-agent.exe ./cmd/omnidev-agent
+$version = "dev"
+try {
+    $version = (git describe --tags --always --dirty 2>$null)
+    if (-not $version) { $version = "dev" }
+} catch { }
+$buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+go build -ldflags "-X main.version=$version -X main.buildTime=$buildTime" -o bin/omnidev-agent.exe ./cmd/omnidev-agent
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Build successful" -ForegroundColor Green

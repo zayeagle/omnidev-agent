@@ -31,13 +31,13 @@ func (m *model) View() string {
 
 	var b strings.Builder
 
-	// ── Header: compact when session active ──
-	headerRows := 3
-	if m.turns.Count() > 0 {
-		b.WriteString(components.AgentHeaderCompact(m.version, modelName))
-		headerRows = 1
+	info := m.headerInfo()
+	compactHeader := m.turns.Count() > 0
+	headerRows := components.HeaderLineCount(compactHeader)
+	if compactHeader {
+		b.WriteString(components.AgentHeaderCompact(info))
 	} else {
-		b.WriteString(components.AgentHeader(m.version))
+		b.WriteString(components.AgentHeader(info))
 	}
 
 	// Reserve: header + working(0-1) + input(1) + footer(1) + gaps(2)
@@ -110,8 +110,6 @@ var (
 func welcomeBanner(width int) string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(welcomeTextStyle.Render("  Type a message and press Enter to begin."))
-	sb.WriteString("\n\n")
 	sb.WriteString(welcomeTitleStyle.Render("  Examples"))
 	sb.WriteString("\n")
 	sb.WriteString(welcomeTextStyle.Render("  > implement a hello-world HTTP server"))

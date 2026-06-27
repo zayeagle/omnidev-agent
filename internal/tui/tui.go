@@ -44,11 +44,12 @@ type model struct {
 	// Global spinner frame for the Working indicator
 	spinnerFrame int
 	version      string
+	buildTime    string
 	agentState   string // latest agent.State string for working label
 }
 
 // New creates the top-level TUI model.
-func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard, version string) tea.Model {
+func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard, version, buildTime string) tea.Model {
 	return &model{
 		agent:        a,
 		guard:        guard,
@@ -56,7 +57,12 @@ func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard,
 		input:        components.NewInputLine(),
 		turns:        components.NewTurnList(50),
 		version:      version,
+		buildTime:    buildTime,
 	}
+}
+
+func (m *model) headerInfo() components.HeaderInfo {
+	return components.HeaderInfo{Version: m.version, BuildTime: m.buildTime}
 }
 
 // Init is called once when the program starts.

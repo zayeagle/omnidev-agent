@@ -22,7 +22,7 @@ func runTUI(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGua
 		// Stdin mode walks the full PTY and works correctly for all locales.
 	}
 
-	p := tea.NewProgram(tui.New(a, cfg, guard, version), opts...)
+	p := tea.NewProgram(tui.New(a, cfg, guard, version, buildTime), opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		fmt.Fprintln(os.Stderr)

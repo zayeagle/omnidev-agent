@@ -15,10 +15,11 @@ try {
         $version = (git describe --tags --always --dirty 2>$null)
         if (-not $version) { $version = "dev" }
     } catch { }
+    $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "bin") | Out-Null
     Write-Host "Building $ExeName ($version)..."
-    go build -ldflags "-X main.version=$version" -o $Src ./cmd/omnidev-agent
+    go build -ldflags "-X main.version=$version -X main.buildTime=$buildTime" -o $Src ./cmd/omnidev-agent
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
