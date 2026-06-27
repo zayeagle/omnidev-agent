@@ -28,9 +28,6 @@ type model struct {
 
 	turnCount int
 
-	// Welcome message shown on first launch
-	welcomeShown bool
-
 	// Permission confirmation state
 	confirming         bool
 	confirmLevel       string

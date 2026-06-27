@@ -14,7 +14,7 @@ var (
 
 const agentTagline = "Terminal coding agent — read docs, write code, run tools (with approval)."
 
-const agentCommandsHint = "Commands: /help /status /model /clear /sessions · Esc cancel · Y/N/A confirm · PgUp/PgDn scroll"
+const agentCommandsHint = "/help /status /model /clear /sessions /checkpoint /yolo · Esc cancel · Y/N/A confirm · PgUp/PgDn scroll"
 
 // HeaderInfo holds build metadata shown at the top of the TUI.
 type HeaderInfo struct {
@@ -22,25 +22,8 @@ type HeaderInfo struct {
 	BuildTime string
 }
 
-// AgentHeader renders the welcome title block (empty session).
+// AgentHeader renders the fixed top banner (name, intro, version, build time, commands).
 func AgentHeader(info HeaderInfo) string {
-	return renderHeader(info, false)
-}
-
-// AgentHeaderCompact is a shorter header during an active session (no model name).
-func AgentHeaderCompact(info HeaderInfo) string {
-	return renderHeader(info, true)
-}
-
-// HeaderLineCount returns how many terminal rows the header occupies.
-func HeaderLineCount(compact bool) int {
-	if compact {
-		return 3
-	}
-	return 5
-}
-
-func renderHeader(info HeaderInfo, compact bool) string {
 	version := strings.TrimSpace(info.Version)
 	if version == "" {
 		version = "dev"
@@ -50,14 +33,33 @@ func renderHeader(info HeaderInfo, compact bool) string {
 		buildTime = "unknown"
 	}
 
-	title := headerTitleStyle.Render("omnidev-agent")
-	meta := headerHintStyle.Render(fmt.Sprintf("Version v%s    Built %s", version, buildTime))
-	commands := headerHintStyle.Render(agentCommandsHint)
+	var b strings.Builder
+	b.WriteString(headerTitleStyle.Render("omnidev-agent"))
+	b.WriteByte('\n')
+	b.WriteString(headerHintStyle.Render(agentTagline))
+	b.WriteByte('\n')
+	b.WriteString(headerHintStyle.Render("Version v" + version))
+	b.WriteByte('\n')
+	b.WriteString(headerHintStyle.Render("Built "+buildTime))
+	b.WriteByte('\n')
+	b.WriteString(headerHintStyle.Render("Commands: " + agentCommandsHint))
+	b.WriteByte('\n')
+	return b.String()
+}
 
-	if compact {
-		return title + "\n" + meta + "\n" + commands + "\n"
+// HeaderLineCount is the number of terminal rows reserved for AgentHeader.
+func HeaderLineCount() int { return 5 }
+
+// FormatBuildTime normalizes build timestamps for display.
+func FormatBuildTime(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "unknown" {
+		return "unknown"
 	}
+	return raw
+}
 
-	tagline := headerHintStyle.Render(agentTagline)
-	return title + "\n" + tagline + "\n" + meta + "\n" + commands + "\n"
+// HeaderInfoLabel returns a one-line summary for --version style output.
+func HeaderInfoLabel(info HeaderInfo) string {
+	return fmt.Sprintf("v%s built %s", strings.TrimSpace(info.Version), FormatBuildTime(info.BuildTime))
 }

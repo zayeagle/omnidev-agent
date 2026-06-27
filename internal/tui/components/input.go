@@ -96,11 +96,14 @@ func (il *InputLine) HistNext() {
 	}
 }
 
-func (il *InputLine) View(disabled bool) string {
+func (il *InputLine) View(disabled, hasTurns bool) string {
 	prompt := inputPromptStyle.Render("\u2192 ")
 
 	if len(il.text) == 0 {
-		placeholder := "Add a follow-up"
+		placeholder := "Type a message and press Enter"
+		if hasTurns {
+			placeholder = "Add a follow-up"
+		}
 		if disabled {
 			placeholder = "Agent working…"
 		}
