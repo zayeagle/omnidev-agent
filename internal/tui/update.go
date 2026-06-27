@@ -333,22 +333,21 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 
 	// ── Pipeline: Classification ──
 	case agent.StreamChunkMsg:
-		content := strings.TrimSpace(msg.Content)
-		if content != "" {
-			if isPipelineNoise(content) {
-				handlePipelineMarker(t, content)
+		if appendText, marker, ok := prepareStreamChunk(msg.Content); ok {
+			if marker != "" {
+				handlePipelineMarker(t, marker)
 			} else if t.IsChatMode() || len(t.Tasks) == 0 {
 				if msg.Done {
-					t.FlushReply(content)
+					t.FlushReply(appendText)
 				} else {
-					t.AppendReply(content)
+					t.AppendReply(appendText)
 				}
 			} else {
 				t.StartStep(components.StepThink)
 				if msg.Done {
-					t.FlushLLM(content)
+					t.FlushLLM(appendText)
 				} else {
-					t.AppendLLM(content)
+					t.AppendLLM(appendText)
 				}
 			}
 		}
@@ -597,6 +596,20 @@ func (m *model) buildCheckpointInfo() string {
 		}
 	}
 	return sb.String()
+}
+
+// prepareStreamChunk classifies a stream chunk. Pipeline markers are trimmed for
+// matching; display text keeps original spacing so leading spaces in SSE deltas
+// are not stripped (e.g. " How" must not become "How").
+func prepareStreamChunk(content string) (appendText, pipelineMarker string, ok bool) {
+	if content == "" {
+		return "", "", false
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed != "" && isPipelineNoise(trimmed) {
+		return "", trimmed, true
+	}
+	return content, "", true
 }
 
 func isPipelineNoise(content string) bool {
