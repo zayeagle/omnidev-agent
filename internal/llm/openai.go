@@ -65,6 +65,9 @@ func (c *OpenAIClient) Stream(ctx context.Context, req *Request) (<-chan *Chunk,
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(httpResp.Body)
 		httpResp.Body.Close()
+		if err := extractSSEError(respBody); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("openai: %d %s", httpResp.StatusCode, string(respBody))
 	}
 
@@ -125,6 +128,9 @@ func (c *OpenAIClient) doRequest(ctx context.Context, body openAIRequest) (*open
 		return nil, err
 	}
 	if httpResp.StatusCode >= 400 {
+		if err := extractSSEError(respBody); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("openai: %d %s", httpResp.StatusCode, string(respBody))
 	}
 
@@ -165,6 +171,10 @@ func (c *OpenAIClient) readSSE(ctx context.Context, body io.ReadCloser, ch chan<
 				}
 				if bytes.Equal(payload, []byte("__DONE__")) {
 					ch <- &Chunk{Done: true}
+					return
+				}
+				if err := parseAPIErrorJSON(payload); err != nil {
+					ch <- &Chunk{Error: err.Error(), Done: true}
 					return
 				}
 				var chunk openAIStreamChunk

@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseChatCompletionBody_JSON(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
@@ -23,6 +26,18 @@ func TestParseChatCompletionBody_SSE(t *testing.T) {
 	}
 	if resp.Choices[0].Message.Content == nil || *resp.Choices[0].Message.Content != "Hello" {
 		t.Fatalf("content = %v, want Hello", resp.Choices[0].Message.Content)
+	}
+}
+
+func TestParseChatCompletionBody_SSEError(t *testing.T) {
+	body := []byte("data: {\"error\":{\"code\":\"400\",\"message\":\"bad_request\",\"type\":\"模型推理异常\"}}\n\n" +
+		"data: [DONE]\n\n")
+	_, err := parseChatCompletionBody(body)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "bad_request") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

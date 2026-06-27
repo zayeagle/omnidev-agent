@@ -23,9 +23,14 @@ func parseChatCompletionBody(body []byte) (*openAIResponse, error) {
 	}
 
 	if looksLikeSSE(body) {
-		if resp, err := parseSSEChatCompletion(body); err == nil && resp != nil {
-			return resp, nil
+		if err := extractSSEError(body); err != nil {
+			return nil, err
 		}
+		resp, err := parseSSEChatCompletion(body)
+		if err != nil {
+			return nil, err
+		}
+		return resp, nil
 	}
 
 	// Plain-text fallback (some gateways return raw assistant text).
@@ -61,6 +66,10 @@ func parseSSEChatCompletion(body []byte) (*openAIResponse, error) {
 		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 			continue
+		}
+
+		if err := parseAPIErrorJSON(data); err != nil {
+			return nil, err
 		}
 
 		var chunk openAIStreamChunk
@@ -157,6 +166,57 @@ func maxToolIndex(m map[int]openAIToolCall) int {
 }
 
 func strPtr(s string) *string { return &s }
+
+type apiErrorBody struct {
+	Error *apiError `json:"error"`
+}
+
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Type    string `json:"type"`
+}
+
+func parseAPIErrorJSON(data []byte) error {
+	var body apiErrorBody
+	if err := json.Unmarshal(data, &body); err != nil || body.Error == nil {
+		return nil
+	}
+	e := body.Error
+	msg := e.Message
+	if e.Type != "" {
+		if msg != "" {
+			msg += " (" + e.Type + ")"
+		} else {
+			msg = e.Type
+		}
+	}
+	if msg == "" {
+		msg = "unknown error"
+	}
+	if e.Code != "" {
+		return fmt.Errorf("llm: %s %s", e.Code, msg)
+	}
+	return fmt.Errorf("llm: %s", msg)
+}
+
+func extractSSEError(body []byte) error {
+	var found error
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		if err := parseAPIErrorJSON(data); err != nil {
+			found = err
+		}
+	}
+	return found
+}
 
 func truncateBody(body []byte) string {
 	const limit = 200

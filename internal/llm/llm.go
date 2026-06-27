@@ -20,6 +20,7 @@ type Response struct {
 
 type Chunk struct {
 	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
 	Done    bool   `json:"done"`
 }
 

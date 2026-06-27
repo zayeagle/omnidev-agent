@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/zayeagle/omnidev-agent/internal/llm"
@@ -33,6 +34,9 @@ func collectStream(ctx context.Context, provider llm.Provider, req *llm.Request,
 	}
 	var b strings.Builder
 	for chunk := range ch {
+		if chunk.Error != "" {
+			return nil, fmt.Errorf("%s", chunk.Error)
+		}
 		if chunk.Content != "" {
 			b.WriteString(chunk.Content)
 			if onChunk != nil {
@@ -42,6 +46,9 @@ func collectStream(ctx context.Context, provider llm.Provider, req *llm.Request,
 		if chunk.Done {
 			break
 		}
+	}
+	if b.Len() == 0 {
+		return nil, fmt.Errorf("stream returned no content")
 	}
 	return &llm.Response{Content: b.String()}, nil
 }
