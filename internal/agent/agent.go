@@ -116,7 +116,7 @@ func (a *Agent) setState(s State) {
 func (a *Agent) buildMessages() []llm.Message {
 	sys := "You are a helpful coding assistant. You have access to tools. Use them when needed. Always respond in English."
 	if a.outputDir != "" {
-		sys += fmt.Sprintf("\n\nIMPORTANT: All generated code MUST be written under the directory: %s\nUse paths relative to that directory (e.g. main.go). NEVER create new project files in the repository root, internal/, cmd/, or tests/.", a.outputDir)
+		sys += fmt.Sprintf("\n\nIMPORTANT: All generated code MUST be written under the directory: %s\nUse paths relative to that directory (e.g. main.go). NEVER create new project files in the repository root, internal/, cmd/, or tests/.", displayOutputDir(a.outputDir))
 		if a.projectLayout != "" {
 			sys += "\n\n" + layoutGuidance(a.projectLayout)
 		}

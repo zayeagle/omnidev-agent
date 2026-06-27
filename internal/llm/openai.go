@@ -81,6 +81,11 @@ func (c *OpenAIClient) endpoint() string {
 	return c.baseURL + "/chat/completions"
 }
 
+// GatewayMode returns the configured gateway compatibility profile.
+func (c *OpenAIClient) GatewayMode() string {
+	return c.opts.GatewayMode
+}
+
 func (c *OpenAIClient) buildRequest(req *Request, stream bool) openAIRequest {
 	msgs := req.Messages
 	if c.opts.GatewayMode == GatewayStrict {

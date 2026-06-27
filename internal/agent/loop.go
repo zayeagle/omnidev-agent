@@ -205,7 +205,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 		messages := a.buildMessages()
 		req := &llm.Request{Messages: messages}
 		if includeTools {
-			req.Tools = a.buildToolDefs()
+			req = llm.AdaptToolsForGateway(req, a.buildToolDefs(), llm.ProviderGatewayMode(a.provider))
 		}
 
 		resp, err := stream.ChatWithRetry(ctx, a.provider, req, func(part string) {
