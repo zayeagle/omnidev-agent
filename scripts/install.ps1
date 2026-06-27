@@ -19,7 +19,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "bin") | Out-Null
     Write-Host "Building $ExeName (v$version)..."
-    go build -ldflags "-X main.appVersion=$version -X main.buildTime=$buildTime" -o $Src ./cmd/omnidev-agent
+    go build -ldflags "-X main.appVersion=$version -X 'main.buildTime=$buildTime'" -o $Src ./cmd/omnidev-agent
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null

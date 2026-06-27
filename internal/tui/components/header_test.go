@@ -44,3 +44,10 @@ func TestFooterBar_Wraps(t *testing.T) {
 		t.Fatalf("expected wrapped footer at width 30:\n%s", out)
 	}
 }
+
+func TestFooterExitHint(t *testing.T) {
+	out := FooterExitHint(80)
+	if !strings.Contains(out, "quit") || !strings.Contains(out, "Ctrl+C") {
+		t.Fatalf("exit hint missing quit/Ctrl+C:\n%s", out)
+	}
+}

@@ -76,6 +76,10 @@ func (m *model) View() string {
 			m.turns.ScrollHint(m.transcriptViewportHeight()),
 			m.footerExtra(),
 		))
+		if hint := components.FooterExitHint(w); hint != "" {
+			b.WriteString("\n")
+			b.WriteString(hint)
+		}
 	}
 
 	_ = h // height drives transcriptViewportHeight via layout helpers

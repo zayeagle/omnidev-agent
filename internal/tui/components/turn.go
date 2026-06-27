@@ -386,6 +386,15 @@ func (t *Turn) FlushReply(text string) {
 	t.finishContentSegment(&t.replyOutput)
 }
 
+// SetCommandOutput renders built-in slash-command results as visible reply text (not Thinking).
+func (t *Turn) SetCommandOutput(text string) {
+	if text != "" {
+		t.AppendReply(text)
+	}
+	t.FlushReply("")
+	t.MarkDone()
+}
+
 func (t *Turn) AddStatusLine(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -765,7 +774,7 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 		lines = append(lines, t.renderToolCalls(cw)...)
 	}
 
-	if t.replyOutput.Len() > 0 && !t.HasCompletion() {
+	if t.replyOutput.Len() > 0 {
 		output := strings.TrimRight(t.replyOutput.String(), "\n")
 		style := turnAssistStyle
 		if t.chatMode {

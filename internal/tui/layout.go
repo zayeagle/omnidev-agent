@@ -42,5 +42,6 @@ func (m *model) chromeLineCount(working bool) int {
 		"", // avoid recursive layout via scroll hint
 		m.footerExtra(),
 	))
+	n += renderedLineCount(components.FooterExitHint(w))
 	return n
 }

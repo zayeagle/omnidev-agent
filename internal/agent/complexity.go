@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"runtime"
 	"strings"
 
 	"github.com/zayeagle/omnidev-agent/internal/llm"
@@ -108,6 +109,19 @@ Use this for frontend+backend apps or substantial HTTP backend services with sep
 	default:
 		return `PROJECT LAYOUT: minimal.
 Use the smallest correct solution — often a single file (e.g. main.go) or at most 2–3 files in the workspace.
-Do NOT create DDD layer directories (domain/application/infrastructure/interfaces) unless the user explicitly asks for them.`
+Do NOT create DDD layer directories (domain/application/infrastructure/interfaces) unless the user explicitly asks for them.
+When the deliverable is a runnable Go program or game, finish by running: go build -o <binary-name> .
+Interactive terminal programs must work on the current OS without refusing to run (no "Windows not supported" exits).` + platformGuidance()
+	}
+}
+
+func platformGuidance() string {
+	switch runtime.GOOS {
+	case "windows":
+		return `
+
+PLATFORM (Windows): Do not use Unix-only APIs (stty, /dev/tty) and do not exit early on Windows. Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING for ANSI output and put stdin in raw/console mode via syscall/kernel32 or golang.org/x/term. After coding, run go build -o <name> . — the binary must run directly as .\\<name>.exe in PowerShell or cmd.`
+	default:
+		return ""
 	}
 }

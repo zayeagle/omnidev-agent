@@ -198,39 +198,25 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case "/model":
 			t := m.newTurn("/model")
-			t.StartStep(components.StepThink)
-			t.AppendLLM("Current model: " + m.cfg.Model + " (" + m.cfg.Provider + ")")
-			t.FlushLLM("")
-			t.MarkDone()
+			t.SetCommandOutput("Current model: " + m.cfg.Model + " (" + m.cfg.Provider + ")")
 			return nil
 		case "/status":
 			t := m.newTurn("/status")
-			t.StartStep(components.StepThink)
-			info := NewStatusInfo(m.agent, m.cfg)
-			t.AppendLLM(info)
-			t.FlushLLM("")
-			t.MarkDone()
+			t.SetCommandOutput(NewStatusInfo(m.agent, m.cfg))
 			return nil
 		case "/checkpoint":
 			t := m.newTurn("/checkpoint")
-			t.StartStep(components.StepThink)
-			info := m.buildCheckpointInfo()
-			t.AppendLLM(info)
-			t.FlushLLM("")
-			t.MarkDone()
+			t.SetCommandOutput(m.buildCheckpointInfo())
 			return nil
 		case "/yolo":
 			current := m.agent.Permissions().Interactive()
 			m.agent.Permissions().SetInteractive(!current)
 			t := m.newTurn("/yolo")
-			t.StartStep(components.StepThink)
 			if !current {
-				t.AppendLLM("Permission mode: interactive (confirm before dangerous ops)")
+				t.SetCommandOutput("Permission mode: interactive (confirm before dangerous ops)")
 			} else {
-				t.AppendLLM("Permission mode: yolo (all operations auto-approved)")
+				t.SetCommandOutput("Permission mode: yolo (all operations auto-approved)")
 			}
-			t.FlushLLM("")
-			t.MarkDone()
 			return nil
 		case "quit", "exit":
 			m.quitting = true
@@ -389,10 +375,12 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		t.CompleteStep(components.StepPlan, fmt.Sprintf("%d tasks", len(items)))
 
 	case agent.AllCompleteMsg:
-		t.SetCompletion(msg.Summary, msg.ProjectDir)
-		for _, tk := range t.Tasks {
-			if tk.Status != components.StatusFailed {
-				tk.Status = components.StatusSuccess
+		if !t.IsChatMode() {
+			t.SetCompletion(msg.Summary, msg.ProjectDir)
+			for _, tk := range t.Tasks {
+				if tk.Status != components.StatusFailed {
+					tk.Status = components.StatusSuccess
+				}
 			}
 		}
 		m.turns.ScrollToBottom()
@@ -561,8 +549,7 @@ func readAgentMsg(ch <-chan tea.Msg) tea.Cmd {
 
 func (m *model) showHelp() {
 	t := m.newTurn("/help")
-	t.StartStep(components.StepThink)
-	t.AppendLLM("Built-in commands:\n" +
+	t.SetCommandOutput("Built-in commands:\n" +
 		"  /help       — show this help\n" +
 		"  /clear      — clear all turns\n" +
 		"  /sessions   — list archived session/log files\n" +
@@ -576,8 +563,6 @@ func (m *model) showHelp() {
 		"\n" +
 		"Keyboard: ↑↓/PgUp/PgDn scroll · Home/End jump (empty input) · Ctrl/Alt+↑↓ history\n" +
 		"          Tab/Enter/Space expand Thinking · Esc cancel run · Y/N/A confirm")
-	t.FlushLLM("")
-	t.MarkDone()
 }
 
 // ── Status ───────────────────────────────────────────────────────────────────
@@ -739,36 +724,32 @@ func keyUsesInputHistory(msg tea.KeyMsg) bool {
 
 func (m *model) showSessions() {
 	t := m.newTurn("/sessions")
-	t.StartStep(components.StepThink)
 
 	files, err := session.ListArchives(".ai_history/sessions", ".ai_history/logs", 20)
 	if err != nil {
-		t.AppendLLM("Failed to list archives: " + err.Error())
-	} else if len(files) == 0 {
-		t.AppendLLM("No archived sessions under .ai_history/sessions/ or .ai_history/logs/")
-	} else {
-		var sb strings.Builder
-		sb.WriteString("Archived sessions (newest first):\n\n")
-		for i, f := range files {
-			sb.WriteString(fmt.Sprintf("  %d. [%s] %s  (%s, %d bytes)\n",
-				i+1, f.Kind, f.Name, f.ModTime.Format("2006-01-02 15:04"), f.Size))
-		}
-		sb.WriteString("\nPreview: /session <filename>\n")
-		sb.WriteString("Full logs: .ai_history/logs/YYYYMMDD-session.md (one file per day)")
-		t.AppendLLM(sb.String())
+		t.SetCommandOutput("Failed to list archives: " + err.Error())
+		return
 	}
-	t.FlushLLM("")
-	t.MarkDone()
+	if len(files) == 0 {
+		t.SetCommandOutput("No archived sessions under .ai_history/sessions/ or .ai_history/logs/")
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("Archived sessions (newest first):\n\n")
+	for i, f := range files {
+		sb.WriteString(fmt.Sprintf("  %d. [%s] %s  (%s, %d bytes)\n",
+			i+1, f.Kind, f.Name, f.ModTime.Format("2006-01-02 15:04"), f.Size))
+	}
+	sb.WriteString("\nPreview: /session <filename>\n")
+	sb.WriteString("Full logs: .ai_history/logs/YYYYMMDD-session.md (one file per day)")
+	t.SetCommandOutput(sb.String())
 }
 
 func (m *model) showSession(arg string) {
 	t := m.newTurn("/session " + arg)
-	t.StartStep(components.StepThink)
 
 	if arg == "" {
-		t.AppendLLM("Usage: /session <filename>  e.g. /session 20260626-233232.md")
-		t.FlushLLM("")
-		t.MarkDone()
+		t.SetCommandOutput("Usage: /session <filename>  e.g. /session 20260626-233232.md")
 		return
 	}
 
@@ -785,10 +766,8 @@ func (m *model) showSession(arg string) {
 
 	preview, err := session.ReadArchivePreview(path, 12000)
 	if err != nil {
-		t.AppendLLM("Cannot read archive: " + err.Error())
-	} else {
-		t.AppendLLM(fmt.Sprintf("File: %s\n\n%s", path, preview))
+		t.SetCommandOutput("Cannot read archive: " + err.Error())
+		return
 	}
-	t.FlushLLM("")
-	t.MarkDone()
+	t.SetCommandOutput(fmt.Sprintf("File: %s\n\n%s", path, preview))
 }

@@ -18,7 +18,7 @@ if (Test-Path $versionFile) {
 }
 $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 Write-Host "Version v$version" -ForegroundColor Cyan
-go build -ldflags "-X main.appVersion=$version -X main.buildTime=$buildTime" -o bin/omnidev-agent.exe ./cmd/omnidev-agent
+go build -ldflags "-X main.appVersion=$version -X 'main.buildTime=$buildTime'" -o bin/omnidev-agent.exe ./cmd/omnidev-agent
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Build successful" -ForegroundColor Green

@@ -1,6 +1,9 @@
 package components
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTurnStatusAndLLMSegments(t *testing.T) {
 	tn := NewTurn(1, "hello")
@@ -29,6 +32,18 @@ func TestTurnContentGapAfterStatus(t *testing.T) {
 	out := tn.llmOutput.String()
 	if out == "" || out[0] == 'P' {
 		t.Fatalf("llm should not merge into status line: %q", out)
+	}
+}
+
+func TestTurnCommandOutputNotInThinking(t *testing.T) {
+	tn := NewTurn(1, "/sessions")
+	tn.SetCommandOutput("Archived sessions (newest first):\n\n  1. [session] foo.md")
+	body := joinLines(tn.render(80, false))
+	if strings.Contains(body, "Thinking") {
+		t.Fatalf("command output should not render as Thinking:\n%s", body)
+	}
+	if !strings.Contains(body, "Archived sessions") {
+		t.Fatalf("command output missing from render:\n%s", body)
 	}
 }
 

@@ -460,10 +460,11 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 	}
 
 	// Done — only the parent agent loop signals completion to the TUI.
+	// Pure conversation (includeTools=false) has no task banner.
 	if !a.subAgent && a.state != StateError {
 		if a.outputDir != "" {
 			msgCh <- NewAllComplete(1, a.outputDir)
-		} else {
+		} else if includeTools {
 			msgCh <- AllCompleteMsg{Summary: "Task completed."}
 		}
 		a.setState(StateDone)

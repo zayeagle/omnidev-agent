@@ -18,7 +18,10 @@ var (
 
 // CompletionPanelLines renders a pinned completion banner (always visible after success).
 func CompletionPanelLines(t *Turn, width int) []string {
-	if t == nil || strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" {
+	if t == nil || t.IsChatMode() {
+		return nil
+	}
+	if strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" {
 		return nil
 	}
 	if width < 20 {
