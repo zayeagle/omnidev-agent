@@ -32,6 +32,25 @@ func TestOpenAIRequestIncludesMaxTokens(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestWithToolsUsesStream(t *testing.T) {
+	client := NewOpenAI("https://api.example.com/v1", "key", "gpt-4o", Options{MaxTokens: 4096, TimeoutSec: 30, GatewayMode: GatewayOpenAI})
+	body := client.buildRequest(&Request{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    []Tool{{Name: "read_file", Description: "read", Parameters: map[string]interface{}{}}},
+	}, true)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["stream"] != true {
+		t.Fatalf("tool request should set stream=true, got %v", m["stream"])
+	}
+}
+
 func TestOpenAIMessageOmitsNullContent(t *testing.T) {
 	msg := openAIMessage{
 		Role: "assistant",

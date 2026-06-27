@@ -59,7 +59,7 @@ type TaskDispatcher struct {
 func NewTaskDispatcher(agent *Agent) *TaskDispatcher {
 	return &TaskDispatcher{
 		agent:            agent,
-		maxParallel:      4,
+		maxParallel:      1, // enterprise gateways often reject concurrent inference requests
 		subAgentTimeout:  120 * time.Second,
 		subAgentMaxTurns: 10,
 	}
@@ -103,6 +103,18 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 
 	msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(tasks)}
 
+	// Single-task plans run on the parent agent (same message shape as direct curl tests).
+	if len(tasks) == 1 {
+		cp.Phase = CheckpointExecuting
+		d.checkpointSave(cp)
+		msgCh <- StreamChunkMsg{Content: "Single task — executing on main agent.", Done: true}
+		if err := d.agent.standardLoop(ctx, msgCh, true); err != nil {
+			return false, err
+		}
+		d.checkpointClear()
+		return true, nil
+	}
+
 	err = d.executeTasksWithCheckpoint(ctx, cp, msgCh)
 	if err != nil {
 		return false, err
@@ -120,7 +132,7 @@ func (d *TaskDispatcher) Plan(ctx context.Context, instruction string) ([]Task, 
 	case LayoutDDD:
 		layoutHint = "\n- Project uses DDD layered architecture; split tasks by layer when sensible"
 	case LayoutMinimal:
-		layoutHint = "\n- Project is minimal scope; prefer ONE task unless clearly separable (e.g. calculator = single task)"
+		layoutHint = "\n- Project is minimal scope; prefer exactly ONE task for small programs (snake game, calculator, CLI). Only split when clearly separable."
 	}
 
 	prompt := fmt.Sprintf(`You are a task planner. Decompose the following development request into independent sub-tasks.

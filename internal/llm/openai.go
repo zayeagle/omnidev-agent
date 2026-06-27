@@ -33,9 +33,10 @@ func NewOpenAI(baseURL, apiKey, model string, opts Options) *OpenAIClient {
 	}
 }
 
-// Chat sends a non-streaming request.
+// Chat sends a non-streaming request (or SSE when tools are present — some gateways require stream for tool calls).
 func (c *OpenAIClient) Chat(ctx context.Context, req *Request) (*Response, error) {
-	body := c.buildRequest(req, false)
+	stream := len(req.Tools) > 0
+	body := c.buildRequest(req, stream)
 	resp, err := c.doRequest(ctx, body)
 	if err != nil {
 		return nil, err
@@ -145,7 +146,6 @@ func (c *OpenAIClient) doRequest(ctx context.Context, body openAIRequest) (*open
 
 func (c *OpenAIClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
