@@ -15,18 +15,19 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/session"
 	"github.com/zayeagle/omnidev-agent/internal/tools"
+	verpkg "github.com/zayeagle/omnidev-agent/internal/version"
 )
 
 var (
-	version   = "dev"
-	buildTime = "unknown"
+	appVersion = "0.0.0"
+	buildTime  = "unknown"
 )
 
 func main() {
 	flags := parseFlags()
 
 	if flags.version {
-		fmt.Printf("omnidev-agent version %s  built %s  go%s/%s\n", version, buildTime, runtime.Version(), runtime.GOARCH)
+		fmt.Printf("omnidev-agent %s  built %s  go%s/%s\n", verpkg.Display(appVersion), buildTime, runtime.Version(), runtime.GOARCH)
 		os.Exit(0)
 	}
 

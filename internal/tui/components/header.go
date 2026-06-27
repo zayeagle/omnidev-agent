@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/zayeagle/omnidev-agent/internal/version"
 )
 
 var (
@@ -24,10 +25,7 @@ type HeaderInfo struct {
 
 // AgentHeader renders the fixed top banner (name, intro, version, build time, commands).
 func AgentHeader(info HeaderInfo) string {
-	version := strings.TrimSpace(info.Version)
-	if version == "" {
-		version = "dev"
-	}
+	ver := version.Display(info.Version)
 	buildTime := strings.TrimSpace(info.BuildTime)
 	if buildTime == "" {
 		buildTime = "unknown"
@@ -38,7 +36,7 @@ func AgentHeader(info HeaderInfo) string {
 	b.WriteByte('\n')
 	b.WriteString(headerHintStyle.Render(agentTagline))
 	b.WriteByte('\n')
-	b.WriteString(headerHintStyle.Render("Version v" + version))
+	b.WriteString(headerHintStyle.Render("Version "+ver))
 	b.WriteByte('\n')
 	b.WriteString(headerHintStyle.Render("Built "+buildTime))
 	b.WriteByte('\n')
@@ -61,5 +59,5 @@ func FormatBuildTime(raw string) string {
 
 // HeaderInfoLabel returns a one-line summary for --version style output.
 func HeaderInfoLabel(info HeaderInfo) string {
-	return fmt.Sprintf("v%s built %s", strings.TrimSpace(info.Version), FormatBuildTime(info.BuildTime))
+	return fmt.Sprintf("%s built %s", version.Display(info.Version), FormatBuildTime(info.BuildTime))
 }

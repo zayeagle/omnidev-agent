@@ -4,9 +4,9 @@ SHELL   := /bin/bash
 GO      := /usr/local/go/bin/go
 BIN_DIR := bin
 SRC     := ./cmd/omnidev-agent
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION := $(shell tr -d '\r\n ' < VERSION 2>/dev/null || echo "0.0.0")
 BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
-LDFLAGS := -X main.version=$(VERSION) -X 'main.buildTime=$(BUILD_TIME)'
+LDFLAGS := -X main.appVersion=$(VERSION) -X 'main.buildTime=$(BUILD_TIME)'
 
 # Install destination
 PREFIX         ?= $(HOME)/.local
@@ -18,7 +18,7 @@ GOARCHES := amd64 arm64
 EXT_windows := .exe
 
 .PHONY: all build run test vet clean install uninstall deploy help config
-.PHONY: build-all fmt lint
+.PHONY: build-all fmt lint bump-patch bump-minor bump-major publish
 .PHONY: $(foreach os,$(GOOSES),$(foreach arch,$(GOARCHES),build-$(os)-$(arch)))
 
 # ── Default ─────────────────────────────────────────────────────────────────
@@ -28,7 +28,25 @@ all: vet build test
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/omnidev-agent $(SRC)
-	@echo "✔ Built: $(BIN_DIR)/omnidev-agent ($(VERSION))"
+	@echo "✔ Built: $(BIN_DIR)/omnidev-agent (v$(VERSION))"
+
+# ── Version bump (semver in VERSION file) ────────────────────────────────────
+bump-patch:
+	@bash scripts/bump-version.sh patch
+
+bump-minor:
+	@bash scripts/bump-version.sh minor
+
+bump-major:
+	@bash scripts/bump-version.sh major
+
+# Bump patch, commit VERSION, and push to origin (use instead of raw git push).
+publish: bump-patch
+	@NEW=$$(tr -d '\r\n ' < VERSION); \
+	git add VERSION; \
+	git commit -m "chore: release v$$NEW"; \
+	git push origin main; \
+	echo "✔ Published v$$NEW"
 
 # ── Cross-compile: single target ───────────────────────────────────────────
 # Usage: make build-linux-amd64, make build-darwin-arm64, make build-windows-amd64, etc.
@@ -37,7 +55,7 @@ build-$(1)-$(2):
 	@mkdir -p $(BIN_DIR)
 	GOOS=$(1) GOARCH=$(2) $(GO) build -ldflags "$(LDFLAGS)" \
 		-o $(BIN_DIR)/omnidev-agent-$(1)-$(2)$$(EXT_$(1)) $(SRC)
-	@echo "✔ Built: $(BIN_DIR)/omnidev-agent-$(1)-$(2)$$(EXT_$(1)) ($(VERSION))"
+	@echo "✔ Built: $(BIN_DIR)/omnidev-agent-$(1)-$(2)$$(EXT_$(1)) (v$(VERSION))"
 endef
 $(foreach os,$(GOOSES),$(foreach arch,$(GOARCHES),$(eval $(call build_rule,$(os),$(arch)))))
 
@@ -139,6 +157,8 @@ help:
 	@echo "  make install                安装到 $(INSTALL_BIN_DIR)"
 	@echo "  make uninstall              卸载 + 清理配置"
 	@echo "  make deploy                 install + config + PATH 检查"
+	@echo "  make bump-patch             0.0.0 -> 0.0.1 (VERSION file)"
+	@echo "  make publish                bump-patch + commit VERSION + push"
 	@echo "  make help                   此帮助"
 	@echo ""
 	@echo "  Install path:  make install PREFIX=/usr/local"

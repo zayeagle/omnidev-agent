@@ -11,13 +11,14 @@ Write-Host "Module: github.com/zayeagle/omnidev-agent" -ForegroundColor Cyan
 
 # ── Build ──
 Write-Host "`nBuilding..." -ForegroundColor Yellow
-$version = "dev"
-try {
-    $version = (git describe --tags --always --dirty 2>$null)
-    if (-not $version) { $version = "dev" }
-} catch { }
+$version = "0.0.0"
+$versionFile = Join-Path $projectRoot "VERSION"
+if (Test-Path $versionFile) {
+    $version = (Get-Content $versionFile -Raw).Trim().TrimStart("v")
+}
 $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-go build -ldflags "-X main.version=$version -X main.buildTime=$buildTime" -o bin/omnidev-agent.exe ./cmd/omnidev-agent
+Write-Host "Version v$version" -ForegroundColor Cyan
+go build -ldflags "-X main.appVersion=$version -X main.buildTime=$buildTime" -o bin/omnidev-agent.exe ./cmd/omnidev-agent
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Build successful" -ForegroundColor Green

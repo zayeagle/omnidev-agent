@@ -10,16 +10,16 @@ $Dst = Join-Path $BinDir $ExeName
 
 Push-Location $Root
 try {
-    $version = "dev"
-    try {
-        $version = (git describe --tags --always --dirty 2>$null)
-        if (-not $version) { $version = "dev" }
-    } catch { }
+    $version = "0.0.0"
+    $versionFile = Join-Path $Root "VERSION"
+    if (Test-Path $versionFile) {
+        $version = (Get-Content $versionFile -Raw).Trim().TrimStart("v")
+    }
     $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "bin") | Out-Null
-    Write-Host "Building $ExeName ($version)..."
-    go build -ldflags "-X main.version=$version -X main.buildTime=$buildTime" -o $Src ./cmd/omnidev-agent
+    Write-Host "Building $ExeName (v$version)..."
+    go build -ldflags "-X main.appVersion=$version -X main.buildTime=$buildTime" -o $Src ./cmd/omnidev-agent
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null

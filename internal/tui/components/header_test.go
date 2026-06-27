@@ -6,11 +6,11 @@ import (
 )
 
 func TestAgentHeader_IncludesRequiredFields(t *testing.T) {
-	out := AgentHeader(HeaderInfo{Version: "abc123", BuildTime: "2026-06-26 22:30:45"})
+	out := AgentHeader(HeaderInfo{Version: "0.0.1", BuildTime: "2026-06-26 22:30:45"})
 	for _, want := range []string{
 		"omnidev-agent",
 		agentTagline,
-		"Version vabc123",
+		"Version v0.0.1",
 		"Built 2026-06-26 22:30:45",
 		"Commands:",
 		"/help",
