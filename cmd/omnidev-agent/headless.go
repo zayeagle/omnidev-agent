@@ -62,6 +62,15 @@ func runHeadless(ctx context.Context, a *agent.Agent, sess *session.Session, sto
 				return ctx.Err()
 			}
 
+		case agent.TaskPlanConfirmMsg:
+			fmt.Printf("\n📋 Task plan: %d sub-tasks\n", m.TaskCount)
+			fmt.Println("  (auto-confirm — headless mode; use TUI for Enter/Esc)")
+			select {
+			case m.Reply <- agent.TaskPlanConfirmResponse{Confirmed: true}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
 		case agent.ConfirmRequestMsg:
 			fmt.Printf("\n⛔ Permission required: %s\n", m.Description)
 			fmt.Println("  (denied — headless mode blocks dangerous ops; use TUI or --yolo)")
@@ -79,11 +88,8 @@ func runHeadless(ctx context.Context, a *agent.Agent, sess *session.Session, sto
 		}
 	}
 
-	if err := store.Save(sess); err != nil {
+	if err := store.SaveActive(sess); err != nil {
 		fmt.Fprintf(os.Stderr, "session save: %v\n", err)
-	}
-	if err := store.Export(sess); err != nil {
-		fmt.Fprintf(os.Stderr, "session export: %v\n", err)
 	}
 
 	return nil

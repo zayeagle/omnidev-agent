@@ -99,6 +99,8 @@ func (il *InputLine) HistNext() {
 	}
 }
 
+const inputMinLines = 2
+
 func (il *InputLine) View(disabled, hasTurns bool, width int) string {
 	if width < 20 {
 		width = 80
@@ -116,18 +118,18 @@ func (il *InputLine) View(disabled, hasTurns bool, width int) string {
 			placeholder = "Add a follow-up"
 		}
 		if disabled {
-			placeholder = "Agent working…"
+			placeholder = "Agent working… (/yolo or Ctrl+Y to toggle mode)"
 		}
-		return renderInputLines(prompt, promptWidth, WrapDisplayWidth(placeholder, contentWidth), func(line string) string {
+		return padInputMinLines(renderInputLines(prompt, promptWidth, WrapDisplayWidth(placeholder, contentWidth), func(line string) string {
 			return inputPlaceholderStyle.Render(line)
-		})
+		}), inputMinLines, promptWidth)
 	}
 
 	full := string(il.text)
 	if disabled {
-		return renderInputLines(prompt, promptWidth, WrapDisplayWidth(full, contentWidth), func(line string) string {
+		return padInputMinLines(renderInputLines(prompt, promptWidth, WrapDisplayWidth(full, contentWidth), func(line string) string {
 			return inputPlaceholderStyle.Render(line)
-		})
+		}), inputMinLines, promptWidth)
 	}
 
 	before := string(il.text[:il.cursor])
@@ -145,7 +147,7 @@ func (il *InputLine) View(disabled, hasTurns bool, width int) string {
 		plain = before + marker
 	}
 	lines := WrapDisplayWidth(plain, contentWidth)
-	return renderInputLines(prompt, promptWidth, lines, func(line string) string {
+	return padInputMinLines(renderInputLines(prompt, promptWidth, lines, func(line string) string {
 		if !strings.Contains(line, marker) {
 			return line
 		}
@@ -154,7 +156,15 @@ func (il *InputLine) View(disabled, hasTurns bool, width int) string {
 			return parts[0] + inputCursorStyle.Render(cur) + parts[1]
 		}
 		return parts[0] + inputCursorStyle.Render(cur)
-	})
+	}), inputMinLines, promptWidth)
+}
+
+func padInputMinLines(block string, minLines, promptWidth int) string {
+	lines := strings.Split(block, "\n")
+	for len(lines) < minLines {
+		lines = append(lines, strings.Repeat(" ", promptWidth))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderInputLines(prompt string, promptWidth int, lines []string, styleFn func(string) string) string {

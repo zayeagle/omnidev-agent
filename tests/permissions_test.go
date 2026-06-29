@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,12 +150,18 @@ func TestDangerousToolDenyFlow(t *testing.T) {
 	for range msgCh {
 	}
 
-	// Verify session recorded the rejection
+	// Verify session recorded the rejection with Error for LLM tool protocol
 	foundDenied := false
 	for _, e := range sess.Entries {
 		for _, tc := range e.ToolCalls {
 			if tc.Name == "shell_exec" && !tc.Allowed {
 				foundDenied = true
+				if tc.Error == "" {
+					t.Error("expected shell_exec denial Error set for buildMessages tool result")
+				}
+				if !strings.Contains(tc.Error, "test denial") {
+					t.Errorf("expected denial reason in Error, got %q", tc.Error)
+				}
 			}
 		}
 	}

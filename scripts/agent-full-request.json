@@ -1,0 +1,186 @@
+{
+  "max_tokens": 8192,
+  "messages": [
+    {
+      "content": "You are a helpful coding assistant. You have access to tools. Use them when needed. Always respond in English.\n\nIMPORTANT: All generated code MUST be written under the directory: deliverables/snake-game\nUse paths relative to that directory (e.g. main.go). NEVER create new project files in the repository root, internal/, cmd/, or tests/.\n\nPROJECT LAYOUT: minimal.\nUse the smallest correct solution — often a single file (e.g. main.go) or at most 2–3 files in the workspace.\nDo NOT create DDD layer directories (domain/application/infrastructure/interfaces) unless the user explicitly asks for them.\n\n帮我写一个贪吃蛇的小游戏",
+      "role": "user"
+    }
+  ],
+  "model": "deepseek/deepseek-v4-pro",
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Delete a file or directory.",
+        "name": "delete_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Path to the file or directory to delete.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Replace a snippet of text in a file. Finds old_snippet and replaces with new_snippet.",
+        "name": "edit_file",
+        "parameters": {
+          "properties": {
+            "new_snippet": {
+              "description": "The replacement text.",
+              "type": "string"
+            },
+            "old_snippet": {
+              "description": "The exact text to find and replace.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Path to the file to edit.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "new_snippet",
+            "old_snippet",
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "List the contents of a directory.",
+        "name": "list_dir",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Directory path to list. Defaults to current directory.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Read the complete contents of a file.",
+        "name": "read_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Path to the file to read.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Search code for keywords or regex patterns.",
+        "name": "search_code",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Directory or file to search in. Defaults to current directory.",
+              "type": "string"
+            },
+            "query": {
+              "description": "Keyword or regex pattern to search for.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Search for files by name pattern (glob-style or substring).",
+        "name": "search_file",
+        "parameters": {
+          "properties": {
+            "path": {
+              "description": "Directory to search in. Defaults to current directory.",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "Pattern to match against file names. Supports * wildcard.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Execute a shell command with a 30-second timeout. Uses cmd /C on Windows and sh -c on Linux/macOS (any CPU arch).",
+        "name": "shell_exec",
+        "parameters": {
+          "properties": {
+            "cmd": {
+              "description": "The shell command to execute.",
+              "type": "string"
+            },
+            "workdir": {
+              "description": "Working directory for the command. Defaults to current directory.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Create a new file or overwrite an existing file with the given content.",
+        "name": "write_file",
+        "parameters": {
+          "properties": {
+            "content": {
+              "description": "Content to write to the file.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Path to the file to write.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

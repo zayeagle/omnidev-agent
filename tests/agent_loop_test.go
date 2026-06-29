@@ -176,7 +176,6 @@ func TestAgentLoopToolCallsWithoutContent(t *testing.T) {
 func TestAgentLoopMaxTurns(t *testing.T) {
 	// LLM that always returns tool calls — should hit maxTurns limit
 	mock := llm.NewMockProvider(nil)
-	// Add 5 tool call responses (maxTurns will be set to 3)
 	for i := 0; i < 5; i++ {
 		mock.AddResponse(&llm.Response{
 			Content: "processing...",

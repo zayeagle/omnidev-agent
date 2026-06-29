@@ -35,8 +35,14 @@ func TestDispatcherSimpleDecomposition(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
-	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
+	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
+		MaxParallel:     agent.DefaultDispatcherOptions().MaxParallel,
+		SubAgentTimeout:   agent.DefaultDispatcherOptions().SubAgentTimeout,
+		SubAgentMaxTurns:  agent.DefaultDispatcherOptions().SubAgentMaxTurns,
+		SkipPlanConfirm:   true,
+	})
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -68,8 +74,14 @@ func TestDispatcherSingleTaskHandled(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
-	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
+	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
+		MaxParallel:     agent.DefaultDispatcherOptions().MaxParallel,
+		SubAgentTimeout:   agent.DefaultDispatcherOptions().SubAgentTimeout,
+		SubAgentMaxTurns:  agent.DefaultDispatcherOptions().SubAgentMaxTurns,
+		SkipPlanConfirm:   true,
+	})
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -98,8 +110,14 @@ func TestDispatcherPlanParsing(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
-	dispatcher := agent.NewTaskDispatcher(a, agent.DefaultDispatcherOptions())
+	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
+		MaxParallel:     agent.DefaultDispatcherOptions().MaxParallel,
+		SubAgentTimeout:   agent.DefaultDispatcherOptions().SubAgentTimeout,
+		SubAgentMaxTurns:  agent.DefaultDispatcherOptions().SubAgentMaxTurns,
+		SkipPlanConfirm:   true,
+	})
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

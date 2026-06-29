@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,6 +45,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agent.SubtaskMsg:
 		m.handleAgentMsg(msg)
 	case agent.TaskPlanMsg:
+		m.handleAgentMsg(msg)
+	case agent.TaskPlanConfirmMsg:
 		m.handleAgentMsg(msg)
 	case agent.CheckpointPromptMsg:
 		m.handleAgentMsg(msg)
@@ -110,14 +111,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if t := m.currentTurn(); t != nil && t.FinalStatus == components.TurnRunning {
 			t.MarkDone()
 		}
+		m.persistActiveSession()
 	}
 	return m, nil
 }
 
 // handleKey processes keyboard events.
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
-	// During confirmation or checkpoint prompt, only Y/N/A/Esc handled
-	if m.confirming || m.checkpointing {
+	if msg.Type == tea.KeyCtrlY {
+		m.applyPermissionToggle()
+		return nil
+	}
+
+	// During confirmation, checkpoint, or plan review — limited keys only
+	if m.confirming || m.checkpointing || m.planConfirming {
+		if m.planConfirming {
+			switch msg.Type {
+			case tea.KeyEnter:
+				if m.planConfirmReply != nil {
+					m.planConfirmReply <- agent.TaskPlanConfirmResponse{Confirmed: true}
+				}
+				m.planConfirming = false
+				m.planConfirmReply = nil
+			case tea.KeyEsc, tea.KeyCtrlC:
+				if m.planConfirmReply != nil {
+					m.planConfirmReply <- agent.TaskPlanConfirmResponse{Confirmed: false}
+				}
+				m.planConfirming = false
+				m.planConfirmReply = nil
+			}
+			return nil
+		}
 		switch strings.ToLower(msg.String()) {
 		case "y":
 			if m.checkpointing {
@@ -167,6 +191,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
+		m.persistActiveSession()
 		m.quitting = true
 		if m.cancel != nil {
 			m.cancel()
@@ -176,62 +201,38 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyEnter:
 		input := strings.TrimSpace(m.input.Text())
 		if input == "" {
-			if t := m.currentTurn(); t != nil && t.HasCollapsibleThinking() {
-				t.ToggleThinkExpanded()
+			if t := m.currentTurn(); t != nil {
+				if t.HasCollapsibleThinking() {
+					t.ToggleThinkExpanded()
+					return nil
+				}
+				if t.HasCompletion() && len(t.Tasks) > 0 {
+					t.ToggleTasksExpanded()
+					return nil
+				}
 			}
 			return nil
 		}
-		if m.isWorking() {
+		if isSessionSlashCommand(input) {
+			m.input.Submit()
+			m.handleSlashCommand(input)
 			return nil
 		}
-		m.input.Submit()
-		switch input {
-		case "/help":
-			m.showHelp()
-			return nil
-		case "/clear":
-			m.turns = components.NewTurnList(50)
-			m.turnCount = 0
-			return nil
-		case "/sessions":
-			m.showSessions()
-			return nil
-		case "/model":
-			t := m.newTurn("/model")
-			t.SetCommandOutput("Current model: " + m.cfg.Model + " (" + m.cfg.Provider + ")")
-			return nil
-		case "/status":
-			t := m.newTurn("/status")
-			t.SetCommandOutput(NewStatusInfo(m.agent, m.cfg))
-			return nil
-		case "/checkpoint":
-			t := m.newTurn("/checkpoint")
-			t.SetCommandOutput(m.buildCheckpointInfo())
-			return nil
-		case "/yolo":
-			current := m.agent.Permissions().Interactive()
-			m.agent.Permissions().SetInteractive(!current)
-			t := m.newTurn("/yolo")
-			if !current {
-				t.SetCommandOutput("Permission mode: interactive (confirm before dangerous ops)")
-			} else {
-				t.SetCommandOutput("Permission mode: yolo (all operations auto-approved)")
-			}
-			return nil
-		case "quit", "exit":
+		if input == "quit" || input == "exit" {
+			m.input.Submit()
+			m.persistActiveSession()
 			m.quitting = true
 			if m.cancel != nil {
 				m.cancel()
 			}
 			return tea.Quit
-		default:
-			if strings.HasPrefix(input, "/session ") {
-				m.showSession(strings.TrimSpace(strings.TrimPrefix(input, "/session")))
-				return nil
-			}
-			m.newTurn(input)
-			return m.startAgentLoop(input)
 		}
+		if m.isWorking() {
+			return nil
+		}
+		m.input.Submit()
+		m.newTurn(input)
+		return m.startAgentLoop(input)
 
 	case tea.KeyTab:
 		if t := m.currentTurn(); t != nil {
@@ -301,10 +302,13 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.input.Insert(' ')
 	case tea.KeyRunes:
-		if m.isWorking() {
-			return nil
-		}
 		for _, r := range msg.Runes {
+			if r == 't' && strings.TrimSpace(m.input.Text()) == "" {
+				if turn := m.currentTurn(); turn != nil && turn.HasCompletion() && len(turn.Tasks) > 0 {
+					turn.ToggleTasksExpanded()
+					return nil
+				}
+			}
 			// Some Windows terminals emit DEL/BS as runes instead of KeyBackspace.
 			if r == '\b' || r == 127 {
 				m.input.DeleteBefore()
@@ -340,6 +344,20 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 
 	// ── Pipeline: Classification ──
 	case agent.StreamChunkMsg:
+		trimmed := strings.TrimSpace(msg.Content)
+		if strings.Contains(trimmed, "Requirements analysis") {
+			t.StartStep(components.StepAnalyze)
+			t.CompleteStep(components.StepAnalyze, "requirements")
+			body := strings.TrimPrefix(trimmed, "Requirements analysis:")
+			body = strings.TrimSpace(body)
+			if body != "" {
+				t.AppendReply(body)
+			}
+			if msg.Done {
+				t.FlushReply("")
+			}
+			break
+		}
 		if appendText, marker, ok := prepareStreamChunk(msg.Content); ok {
 			if marker != "" {
 				t.AddStatusLine(marker)
@@ -374,11 +392,18 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		t.StartStep(components.StepPlan)
 		t.CompleteStep(components.StepPlan, fmt.Sprintf("%d tasks", len(items)))
 
+	case agent.TaskPlanConfirmMsg:
+		m.planConfirming = true
+		m.planConfirmReply = msg.Reply
+		if t != nil {
+			t.AddStatusLine(fmt.Sprintf("Review %d sub-tasks — Enter to execute, Esc to cancel", msg.TaskCount))
+		}
+
 	case agent.AllCompleteMsg:
 		if !t.IsChatMode() {
 			t.SetCompletion(msg.Summary, msg.ProjectDir)
 			for _, tk := range t.Tasks {
-				if tk.Status != components.StatusFailed {
+				if tk.Status != components.StatusFailed && tk.Status != components.StatusSuccess {
 					tk.Status = components.StatusSuccess
 				}
 			}
@@ -395,6 +420,9 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		if msg.Success {
 			summary := components.SummarizeToolResult(toolName, true, msg.Data, "")
 			t.CompleteToolCall("", true, summary)
+			if fc, ok := components.ParseChangeFromToolResult(toolName, msg.Data); ok {
+				t.RecordFileChange(fc)
+			}
 		} else {
 			summary := components.SummarizeToolResult(toolName, false, "", msg.Error)
 			t.CompleteToolCall("", false, summary)
@@ -461,6 +489,12 @@ func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		m.turns.ScrollUp(3, vh)
 	case tea.MouseWheelDown:
 		m.turns.ScrollDown(3, vh)
+	case tea.MouseLeft, tea.MouseRelease:
+		if m.tasksToggleAtLine >= 0 && msg.Y >= m.tasksToggleAtLine-1 && msg.Y <= m.tasksToggleAtLine+1 {
+			if t := m.currentTurn(); t != nil && t.HasCompletion() && len(t.Tasks) > 0 {
+				t.ToggleTasksExpanded()
+			}
+		}
 	}
 	return nil
 }
@@ -535,6 +569,39 @@ func (m *model) startAgentLoop(instruction string) tea.Cmd {
 	)
 }
 
+func (m *model) startCheckpointRollback(taskID string) tea.Cmd {
+	if taskID == "" {
+		t := m.newTurn("/checkpoint rollback")
+		t.SetCommandOutput("Usage: /checkpoint rollback <task_id>")
+		return nil
+	}
+	d := m.agent.Dispatcher()
+	if d == nil {
+		t := m.newTurn("/checkpoint rollback " + taskID)
+		t.SetCommandOutput("Dispatcher not available.")
+		return nil
+	}
+	m.newTurn("/checkpoint rollback " + taskID)
+	spawn := func() tea.Msg {
+		msgCh := make(chan tea.Msg, 64)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.ctx = ctx
+		m.cancel = cancel
+		go func() {
+			defer close(msgCh)
+			_, _ = d.Rollback(ctx, taskID, msgCh)
+			msgCh <- agent.DoneMsg{}
+		}()
+		return agentLoopStartedMsg{ch: msgCh}
+	}
+	return tea.Batch(
+		spawn,
+		tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+			return spinnerTickMsg{}
+		}),
+	)
+}
+
 func readAgentMsg(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
@@ -551,18 +618,24 @@ func (m *model) showHelp() {
 	t := m.newTurn("/help")
 	t.SetCommandOutput("Built-in commands:\n" +
 		"  /help       — show this help\n" +
-		"  /clear      — clear all turns\n" +
-		"  /sessions   — list archived session/log files\n" +
-		"  /session <file> — preview an archive (.md name or path)\n" +
+		"  /clear      — clear transcript (keeps agent context)\n" +
+		"  /archive    — archive current session and start fresh\n" +
+		"  /sessions   — list archived sessions (first prompt, stats)\n" +
+		"  /session <id> — preview a saved session\n" +
 		"  /model      — show current model\n" +
 		"  /status     — show agent status\n" +
-		"  /yolo       — toggle permission mode (confirm / auto-approve all)\n" +
+		"  /skills     — list loaded agent skills\n" +
+		"  /skill <n>  — load a skill into session context\n" +
+		"  /yolo       — toggle permission mode (confirm ↔ yolo)\n" +
+		"  Ctrl+Y      — toggle permission mode anytime (even while agent runs)\n" +
 		"  [A]         — during a permission prompt: allow all remaining ops\n" +
 		"  /checkpoint — show in-progress checkpoint\n" +
+		"  /checkpoint rollback <task_id> — rollback and re-run from task\n" +
 		"  quit, exit, Ctrl+C — exit\n" +
 		"\n" +
 		"Keyboard: ↑↓/PgUp/PgDn scroll · Home/End jump (empty input) · Ctrl/Alt+↑↓ history\n" +
-		"          Tab/Enter/Space expand Thinking · Esc cancel run · Y/N/A confirm")
+		"          Tab/Enter/Space expand Thinking · t/Enter expand To-dos · click To-dos row\n" +
+		"          Ctrl+Y toggle confirm/yolo · Esc cancel · Y/N/A confirm")
 }
 
 // ── Status ───────────────────────────────────────────────────────────────────
@@ -578,11 +651,53 @@ func NewStatusInfo(a *agent.Agent, cfg *config.Config) string {
 	sb.WriteString("  Timeout:      " + fmt.Sprintf("%d", cfg.Timeout) + "s\n")
 	sb.WriteString("  Tools:        " + fmt.Sprintf("%d", a.Toolbox().Count()) + " registered\n")
 	if a.Permissions().Interactive() {
-		sb.WriteString("  Permissions:  interactive = on")
+		sb.WriteString("  Permissions:  confirm (dangerous ops need approval)\n")
 	} else {
-		sb.WriteString("  Permissions:  interactive = off")
+		sb.WriteString("  Permissions:  yolo (auto-approve all dangerous ops)\n")
+	}
+	maxTok := cfg.EffectiveContextMaxTokens()
+	thresh := cfg.EffectiveContextSummarizeThreshold()
+	sb.WriteString(fmt.Sprintf("  Context:      %.0f%% of %d tokens (compact at %.0f%%)\n",
+		a.ContextUsagePct(), maxTok, thresh*100))
+	if cat := a.SkillCatalog(); cat != nil {
+		sb.WriteString(fmt.Sprintf("  Skills:       %d loaded\n", cat.Count()))
+	}
+	if mgr := a.MCPManager(); mgr != nil {
+		sb.WriteString("  " + mgr.Summary() + "\n")
 	}
 	return sb.String()
+}
+
+func (m *model) showSkills() {
+	t := m.newTurn("/skills")
+	cat := m.agent.SkillCatalog()
+	if cat == nil || cat.Count() == 0 {
+		t.SetCommandOutput("No skills loaded.\n\nAdd SKILL.md under:\n  ~/.omnidev-agent/skills/<name>/SKILL.md\n  .omnidev-agent/skills/<name>/SKILL.md\n\nOr set skills_dirs in config.")
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("Loaded skills:\n")
+	for _, sk := range cat.List() {
+		sb.WriteString(fmt.Sprintf("  • %s — %s\n    %s\n", sk.Name, sk.Description, sk.Path))
+	}
+	sb.WriteString("\nLoad: /skill <name>  or ask the agent to load_skill")
+	t.SetCommandOutput(sb.String())
+}
+
+func (m *model) loadSkillCommand(name string) {
+	t := m.newTurn("/skill " + name)
+	cat := m.agent.SkillCatalog()
+	if cat == nil {
+		t.SetCommandOutput("Skill catalog not initialized.")
+		return
+	}
+	sk, ok := cat.Get(name)
+	if !ok {
+		t.SetCommandOutput("Skill not found: " + name + "\nUse /skills to list.")
+		return
+	}
+	m.agent.Session().AddWithState("system", "[SKILL: "+sk.Name+"]\n"+sk.Body, "skill", 0)
+	t.SetCommandOutput(fmt.Sprintf("Loaded skill %q into session context.\n%s", sk.Name, sk.Description))
 }
 
 func (m *model) buildCheckpointInfo() string {
@@ -616,6 +731,7 @@ func (m *model) buildCheckpointInfo() string {
 			sb.WriteString(fmt.Sprintf("  [pending] task %s: %s\n", t.ID, t.Description))
 		}
 	}
+	sb.WriteString("\nRollback: /checkpoint rollback <task_id>\n")
 	return sb.String()
 }
 
@@ -624,6 +740,9 @@ func (m *model) buildCheckpointInfo() string {
 // are not stripped (e.g. " How" must not become "How").
 func prepareStreamChunk(content string) (appendText, pipelineMarker string, ok bool) {
 	if content == "" {
+		return "", "", false
+	}
+	if looksLikeDSMLToolMarkup(content) {
 		return "", "", false
 	}
 	trimmed := strings.TrimSpace(content)
@@ -664,6 +783,16 @@ func isPipelineNoise(content string) bool {
 		}
 	}
 	return false
+}
+
+// looksLikeDSMLToolMarkup detects raw model tool-call markup that should not appear in chat UI.
+func looksLikeDSMLToolMarkup(content string) bool {
+	if !strings.Contains(content, "DSML") {
+		return false
+	}
+	return strings.Contains(content, "invoke name=") ||
+		strings.Contains(content, "tool_calls") ||
+		strings.Contains(content, "parameter name=")
 }
 
 func handlePipelineMarker(t *components.Turn, content string) {
@@ -725,23 +854,26 @@ func keyUsesInputHistory(msg tea.KeyMsg) bool {
 func (m *model) showSessions() {
 	t := m.newTurn("/sessions")
 
-	files, err := session.ListArchives(".ai_history/sessions", ".ai_history/logs", 20)
+	dir := m.cfg.RuntimeSessionDir()
+	summaries, err := session.ListSessionSummaries(dir, 20)
 	if err != nil {
-		t.SetCommandOutput("Failed to list archives: " + err.Error())
+		t.SetCommandOutput("Failed to list sessions: " + err.Error())
 		return
 	}
-	if len(files) == 0 {
-		t.SetCommandOutput("No archived sessions under .ai_history/sessions/ or .ai_history/logs/")
+	if len(summaries) == 0 {
+		t.SetCommandOutput("No saved sessions in " + dir + "\n\nSessions are saved when a turn completes.")
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("Archived sessions (newest first):\n\n")
-	for i, f := range files {
-		sb.WriteString(fmt.Sprintf("  %d. [%s] %s  (%s, %d bytes)\n",
-			i+1, f.Kind, f.Name, f.ModTime.Format("2006-01-02 15:04"), f.Size))
+	sb.WriteString("Recent sessions (newest first):\n\n")
+	for i, s := range summaries {
+		sb.WriteString(session.FormatSessionSummaryLine(i+1, s))
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\nPreview: /session <filename>\n")
-	sb.WriteString("Full logs: .ai_history/logs/YYYYMMDD-session.md (one file per day)")
+	sb.WriteString("\nOpen detail: /session <id>  e.g. /session ")
+	sb.WriteString(summaries[0].ID)
+	sb.WriteString("\nFiles: ")
+	sb.WriteString(dir)
 	t.SetCommandOutput(sb.String())
 }
 
@@ -749,25 +881,28 @@ func (m *model) showSession(arg string) {
 	t := m.newTurn("/session " + arg)
 
 	if arg == "" {
-		t.SetCommandOutput("Usage: /session <filename>  e.g. /session 20260626-233232.md")
+		t.SetCommandOutput("Usage: /session <id>  e.g. /session 20260626-233232")
 		return
 	}
 
-	path := arg
-	if !strings.ContainsAny(arg, `/\`) {
-		for _, dir := range []string{".ai_history/sessions", ".ai_history/logs"} {
-			candidate := filepath.Join(dir, arg)
-			if _, err := os.Stat(candidate); err == nil {
-				path = candidate
-				break
+	dir := m.cfg.RuntimeSessionDir()
+	detail, err := session.LoadSessionDetail(dir, arg, 8)
+	if err != nil {
+		// Fallback: markdown export if JSON missing
+		path := arg
+		if !strings.ContainsAny(arg, `/\`) {
+			path = filepath.Join(dir, arg)
+			if !strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".json") {
+				path = filepath.Join(dir, arg+".md")
 			}
 		}
-	}
-
-	preview, err := session.ReadArchivePreview(path, 12000)
-	if err != nil {
-		t.SetCommandOutput("Cannot read archive: " + err.Error())
+		preview, readErr := session.ReadArchivePreview(path, 12000)
+		if readErr != nil {
+			t.SetCommandOutput("Cannot load session: " + err.Error())
+			return
+		}
+		t.SetCommandOutput(fmt.Sprintf("File: %s\n\n%s", path, preview))
 		return
 	}
-	t.SetCommandOutput(fmt.Sprintf("File: %s\n\n%s", path, preview))
+	t.SetCommandOutput(detail)
 }

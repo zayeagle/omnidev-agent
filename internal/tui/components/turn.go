@@ -14,6 +14,7 @@ type StepType int
 
 const (
 	StepClassify StepType = iota
+	StepAnalyze
 	StepScan
 	StepScaffold
 	StepPlan
@@ -25,6 +26,8 @@ func (s StepType) String() string {
 	switch s {
 	case StepClassify:
 		return "classify"
+	case StepAnalyze:
+		return "analyze"
 	case StepScan:
 		return "scan"
 	case StepScaffold:
@@ -44,6 +47,8 @@ func (s StepType) Label() string {
 	switch s {
 	case StepClassify:
 		return "Classifying"
+	case StepAnalyze:
+		return "Analyzing requirements"
 	case StepScan:
 		return "Scanning"
 	case StepScaffold:
@@ -63,6 +68,8 @@ func (s StepType) Icon() string {
 	switch s {
 	case StepClassify:
 		return "~"
+	case StepAnalyze:
+		return "◆"
 	case StepScan:
 		return ">"
 	case StepScaffold:
@@ -183,6 +190,9 @@ type Turn struct {
 	// Shown when all tasks complete
 	completionMsg string
 	projectDir    string
+	TasksExpanded bool // collapsed under completion banner by default
+
+	fileChanges []FileChange
 }
 
 func NewTurn(id int, input string) *Turn {
@@ -302,6 +312,7 @@ func (t *Turn) CompleteToolCall(name string, success bool, output string) {
 
 func (t *Turn) SetTasks(tasks []*TaskEntry) {
 	t.Tasks = tasks
+	SortTasksByID(t.Tasks)
 	t.RecomputeTaskBlocked()
 }
 
@@ -430,10 +441,33 @@ func (t *Turn) finishContentSegment(b *strings.Builder) {
 func (t *Turn) SetCompletion(summary, projectDir string) {
 	t.projectDir = projectDir
 	t.completionMsg = summary
+	t.TasksExpanded = false
+}
+
+func (t *Turn) ToggleTasksExpanded() {
+	if len(t.Tasks) == 0 {
+		return
+	}
+	t.TasksExpanded = !t.TasksExpanded
 }
 
 func (t *Turn) HasCompletion() bool {
 	return strings.TrimSpace(t.projectDir) != "" || strings.TrimSpace(t.completionMsg) != ""
+}
+
+func (t *Turn) ReplyText() string       { return t.replyOutput.String() }
+func (t *Turn) LLMText() string         { return t.llmOutput.String() }
+func (t *Turn) CompletionText() string  { return t.completionMsg }
+func (t *Turn) ProjectDirText() string  { return t.projectDir }
+
+func (t *Turn) RestoreReply(text string) {
+	t.replyOutput.Reset()
+	t.replyOutput.WriteString(text)
+}
+
+func (t *Turn) RestoreLLM(text string) {
+	t.llmOutput.Reset()
+	t.llmOutput.WriteString(text)
 }
 
 func (t *Turn) TickSpinner() {
@@ -649,12 +683,12 @@ func (tl *TurnList) buildAllLines() []string {
 }
 
 // TaskPanelLines renders the sticky To-dos panel for a turn.
-func TaskPanelLines(t *Turn, width int) []string {
+func TaskPanelLines(t *Turn, width int, liveStatus string) []string {
 	if t == nil || len(t.Tasks) == 0 || t.HasCompletion() {
 		return nil
 	}
 	collapse := t.FinalStatus == TurnDone && !t.IsActive()
-	return RenderTodoList(t.Tasks, width, collapse)
+	return RenderTodoList(t.Tasks, width, collapse, liveStatus)
 }
 
 // View renders the scrollable transcript. Pass pinTasksTurn when its task box
@@ -705,6 +739,12 @@ func (tl *TurnList) SetWidth(w int) {
 }
 
 func (tl *TurnList) Count() int { return len(tl.turns) }
+
+func (tl *TurnList) AllTurns() []*Turn {
+	out := make([]*Turn, len(tl.turns))
+	copy(out, tl.turns)
+	return out
+}
 
 func (tl *TurnList) TickSpinner() {
 	if t := tl.LastTurn(); t != nil {
@@ -763,7 +803,7 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 
 	if !skipTasks && len(t.Tasks) > 0 && !t.HasCompletion() {
 		collapse := t.FinalStatus == TurnDone
-		lines = append(lines, RenderTodoList(t.Tasks, width, collapse)...)
+		lines = append(lines, RenderTodoList(t.Tasks, width, collapse, "")...)
 	}
 
 	if t.llmOutput.Len() > 0 && !t.chatMode && !t.HasCompletion() {
@@ -799,11 +839,16 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 		lines = append(lines, "")
 	}
 
+	if t.FinalStatus == TurnDone && len(t.fileChanges) > 0 {
+		lines = append(lines, ChangePanelLines(t, width)...)
+	}
+
 	return lines
 }
 
 func (t *Turn) renderToolCalls(cw int) []string {
 	var lines []string
+	argsIndent := "      "
 	for _, tc := range t.ToolCalls {
 		var icon string
 		var style lipgloss.Style
@@ -821,11 +866,21 @@ func (t *Turn) renderToolCalls(cw int) []string {
 		if tc.SubtaskID != "" {
 			head = fmt.Sprintf("  %s [task %s] %s", icon, tc.SubtaskID, tc.Name)
 		}
-		if tc.Args != "" {
-			head += " " + tc.Args
-		}
 		for _, wl := range wrapLine(head, cw) {
 			lines = append(lines, style.Render(wl))
+		}
+		if tc.Args != "" {
+			args := tc.Args
+			if len(args) > cw*3 {
+				args = TruncateMiddle(args, cw*3)
+			}
+			argsWidth := cw - len(argsIndent)
+			if argsWidth < 12 {
+				argsWidth = 12
+			}
+			for _, wl := range wrapLine(args, argsWidth) {
+				lines = append(lines, turnToolStyle.Render(argsIndent+wl))
+			}
 		}
 		detail := tc.Summary
 		if tc.Status == StatusFailed && tc.Error != "" {

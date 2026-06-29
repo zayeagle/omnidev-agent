@@ -11,13 +11,13 @@ import (
 // ChatWithRetry calls the LLM with retry and streams text to onChunk when possible.
 // When tools are present it uses RetryChat (tool_calls need a complete response).
 // When tools are absent it prefers provider.Stream for real incremental output.
-func ChatWithRetry(ctx context.Context, provider llm.Provider, req *llm.Request, onChunk func(string)) (*llm.Response, error) {
+func ChatWithRetry(ctx context.Context, provider llm.Provider, req *llm.Request, onChunk func(string), cfg RetryConfig) (*llm.Response, error) {
 	if len(req.Tools) == 0 {
 		if resp, err := collectStream(ctx, provider, req, onChunk); err == nil {
 			return resp, nil
 		}
 	}
-	resp, err := RetryChat(ctx, provider, req)
+	resp, err := RetryChat(ctx, provider, req, cfg)
 	if err != nil {
 		return nil, err
 	}

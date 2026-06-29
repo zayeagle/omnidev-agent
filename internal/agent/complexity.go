@@ -37,13 +37,16 @@ Examples:
 
 // ComplexityClassifier uses an LLM call to decide minimal vs DDD layout.
 type ComplexityClassifier struct {
-	provider llm.Provider
+	provider    llm.Provider
+	retryConfig stream.RetryConfig
 }
 
 // NewComplexityClassifier creates a classifier using the given LLM provider.
 func NewComplexityClassifier(provider llm.Provider) *ComplexityClassifier {
-	return &ComplexityClassifier{provider: provider}
+	return &ComplexityClassifier{provider: provider, retryConfig: stream.DefaultRetryConfig()}
 }
+
+func (c *ComplexityClassifier) SetRetryConfig(cfg stream.RetryConfig) { c.retryConfig = cfg }
 
 // Classify returns the recommended project layout for a new workspace.
 func (c *ComplexityClassifier) Classify(ctx context.Context, instruction string) ProjectLayout {
@@ -52,7 +55,7 @@ func (c *ComplexityClassifier) Classify(ctx context.Context, instruction string)
 		{Role: "user", Content: instruction},
 	}
 
-	resp, err := stream.RetryChat(ctx, c.provider, &llm.Request{Messages: messages})
+	resp, err := stream.RetryChat(ctx, c.provider, &llm.Request{Messages: messages}, c.retryConfig)
 	if err != nil {
 		return layoutFromHeuristic(instruction)
 	}
@@ -101,17 +104,19 @@ func layoutFromHeuristic(instruction string) ProjectLayout {
 }
 
 func layoutGuidance(layout ProjectLayout) string {
+	return compactLayoutGuidance(layout)
+}
+
+func compactLayoutGuidance(layout ProjectLayout) string {
 	switch layout {
 	case LayoutDDD:
-		return `PROJECT LAYOUT: DDD (layered architecture).
-Organize code under cmd/, internal/domain/, internal/application/, internal/infrastructure/, and internal/interfaces/.
-Use this for frontend+backend apps or substantial HTTP backend services with separated concerns.`
+		return `LAYOUT: DDD — use cmd/, internal/domain/, application/, infrastructure/, interfaces/.`
 	default:
-		return `PROJECT LAYOUT: minimal.
-Use the smallest correct solution — often a single file (e.g. main.go) or at most 2–3 files in the workspace.
-Do NOT create DDD layer directories (domain/application/infrastructure/interfaces) unless the user explicitly asks for them.
-When the deliverable is a runnable Go program or game, finish by running: go build -o <binary-name> .
-Interactive terminal programs must work on the current OS without refusing to run (no "Windows not supported" exits).` + platformGuidance()
+		g := `LAYOUT: minimal — prefer 1–3 files in workspace; no DDD dirs unless asked. Verify with go build ./... (and go test if tests exist); never go run.`
+		if runtime.GOOS == "windows" {
+			g += " Windows: use x/term or kernel32 for raw stdin; no Unix-only APIs."
+		}
+		return g
 	}
 }
 
@@ -120,7 +125,7 @@ func platformGuidance() string {
 	case "windows":
 		return `
 
-PLATFORM (Windows): Do not use Unix-only APIs (stty, /dev/tty) and do not exit early on Windows. Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING for ANSI output and put stdin in raw/console mode via syscall/kernel32 or golang.org/x/term. After coding, run go build -o <name> . — the binary must run directly as .\\<name>.exe in PowerShell or cmd.`
+PLATFORM (Windows): Do not use Unix-only APIs (stty, /dev/tty) and do not exit early on Windows. Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING for ANSI output and put stdin in raw/console mode via syscall/kernel32 or golang.org/x/term. After coding, verify with go build ./... — do not use go run to test servers. The user runs the binary manually if needed.`
 	default:
 		return ""
 	}

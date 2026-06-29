@@ -13,7 +13,7 @@ func TestConfirmDialogDoesNotExceedTerminalWidth(t *testing.T) {
 	if lipgloss.Width(dialog) > termW {
 		t.Fatalf("dialog width %d exceeds terminal %d", lipgloss.Width(dialog), termW)
 	}
-	if !strings.Contains(dialog, "Permission Required") {
+	if !strings.Contains(dialog, "Approval required") {
 		t.Fatal("missing dialog title")
 	}
 }
@@ -27,8 +27,8 @@ func TestConfirmOverlayDoesNotStretchBorder(t *testing.T) {
 			t.Fatalf("overlay line wider than terminal: %d > %d", lipgloss.Width(line), termW)
 		}
 	}
-	// Border corners should appear once per box edge, not stretched across the row.
-	if strings.Count(overlay, "╗") > 1 {
+	// Rounded border corners should appear once per box edge, not stretched across the row.
+	if strings.Count(overlay, "╮") > 1 {
 		t.Fatalf("expected single top-right corner, got stretched border")
 	}
 }

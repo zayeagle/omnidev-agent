@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	workingSpinnerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
-	workingLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#D1D5DB"))
+	workingSpinnerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))
+	workingLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#D4D4D8"))
 )
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

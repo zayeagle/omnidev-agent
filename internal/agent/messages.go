@@ -86,6 +86,17 @@ type TaskPlanMsg struct {
 	Tasks []TaskPlanItem
 }
 
+// TaskPlanConfirmMsg asks the user to approve the task plan before execution.
+type TaskPlanConfirmMsg struct {
+	TaskCount int
+	Reply     chan<- TaskPlanConfirmResponse
+}
+
+// TaskPlanConfirmResponse is the user's decision on the task plan.
+type TaskPlanConfirmResponse struct {
+	Confirmed bool // true = proceed, false = cancel
+}
+
 // AllCompleteMsg signals that every sub-task finished successfully.
 type AllCompleteMsg struct {
 	Summary    string

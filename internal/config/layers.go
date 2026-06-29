@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/zayeagle/omnidev-agent/internal/mcp"
 )
 
 // LoadWithLayers merges configuration from multiple sources with this priority
@@ -16,7 +18,7 @@ func LoadWithLayers(opts LoadOptions) (*Config, error) {
 
 	// Layer 5: defaults (already set via Default())
 
-	// Layer 4: global config file (~/.omnidev-agent/config.json)
+	// Layer 4: global config file (<UserHomeDir>/.omnidev-agent/config.json)
 	if opts.GlobalConfigPath != "" {
 		mergeFile(cfg, opts.GlobalConfigPath)
 	}
@@ -162,6 +164,89 @@ func mergeEnv(dst *Config) {
 			dst.SubAgentMaxTurns = n
 		}
 	}
+	if v := os.Getenv("OMNIDEV_SUB_AGENT_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dst.SubAgentMaxRetries = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_LLM_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dst.LLMMaxRetries = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_LLM_RETRY_BACKOFF_SEC"); v != "" {
+		parts := strings.Split(v, ",")
+		var secs []int
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(p); err == nil && n >= 0 {
+				secs = append(secs, n)
+			}
+		}
+		if len(secs) > 0 {
+			dst.LLMRetryBackoffSec = secs
+		}
+	}
+	if v := os.Getenv("OMNIDEV_MAX_CONSECUTIVE_TOOL_DENIALS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dst.MaxConsecutiveToolDenials = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_TOOL_RESULT_MAX_CHARS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.ToolResultMaxChars = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_TOOL_SPOOL_DIR"); v != "" {
+		dst.ToolSpoolDir = v
+	}
+	if v := os.Getenv("OMNIDEV_SEARCH_CODE_MAX_LINES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.SearchCodeMaxLines = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_LIST_DIR_MAX_ENTRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.ListDirMaxEntries = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_READ_FILE_DEFAULT_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.ReadFileDefaultLimit = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_CONTEXT_TOOL_RESULTS_KEEP_FULL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.ContextToolResultsKeepFull = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_CONTEXT_MIN_KEEP_ENTRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.ContextMinKeepEntries = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_GUARD_ANALYSIS_MAX_CHARS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.GuardAnalysisMaxChars = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_PIPELINE_USE_LLM_CLASSIFIER"); v != "" {
+		dst.PipelineUseLLMClassifier = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("OMNIDEV_PIPELINE_USE_LLM_REQUIREMENTS"); v != "" {
+		dst.PipelineUseLLMRequirements = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("OMNIDEV_PIPELINE_USE_LLM_COMPLEXITY"); v != "" {
+		dst.PipelineUseLLMComplexity = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("OMNIDEV_PIPELINE_PLAN_MODE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 2 {
+			dst.PipelinePlanMode = n
+		}
+	}
 }
 
 // applyNonZero copies src values to dst only when the src value is non-zero.
@@ -219,6 +304,65 @@ func applyNonZero(dst, src *Config) {
 	}
 	if src.SubAgentMaxTurns > 0 {
 		dst.SubAgentMaxTurns = src.SubAgentMaxTurns
+	}
+	if src.SubAgentMaxRetries > 0 {
+		dst.SubAgentMaxRetries = src.SubAgentMaxRetries
+	}
+	if src.LLMMaxRetries > 0 {
+		dst.LLMMaxRetries = src.LLMMaxRetries
+	}
+	if len(src.LLMRetryBackoffSec) > 0 {
+		dst.LLMRetryBackoffSec = append([]int(nil), src.LLMRetryBackoffSec...)
+	}
+	if src.MaxConsecutiveToolDenials > 0 {
+		dst.MaxConsecutiveToolDenials = src.MaxConsecutiveToolDenials
+	}
+	if src.ToolResultMaxChars > 0 {
+		dst.ToolResultMaxChars = src.ToolResultMaxChars
+	}
+	if src.ToolSpoolDir != "" {
+		dst.ToolSpoolDir = src.ToolSpoolDir
+	}
+	if src.SearchCodeMaxLines > 0 {
+		dst.SearchCodeMaxLines = src.SearchCodeMaxLines
+	}
+	if src.ListDirMaxEntries > 0 {
+		dst.ListDirMaxEntries = src.ListDirMaxEntries
+	}
+	if src.ReadFileDefaultLimit > 0 {
+		dst.ReadFileDefaultLimit = src.ReadFileDefaultLimit
+	}
+	if src.ContextToolResultsKeepFull > 0 {
+		dst.ContextToolResultsKeepFull = src.ContextToolResultsKeepFull
+	}
+	if src.ContextMinKeepEntries > 0 {
+		dst.ContextMinKeepEntries = src.ContextMinKeepEntries
+	}
+	if src.GuardAnalysisMaxChars > 0 {
+		dst.GuardAnalysisMaxChars = src.GuardAnalysisMaxChars
+	}
+	if src.PipelineUseLLMClassifier {
+		dst.PipelineUseLLMClassifier = true
+	}
+	if src.PipelineUseLLMRequirements {
+		dst.PipelineUseLLMRequirements = true
+	}
+	if src.PipelineUseLLMComplexity {
+		dst.PipelineUseLLMComplexity = true
+	}
+	if src.PipelinePlanMode > 0 {
+		dst.PipelinePlanMode = src.PipelinePlanMode
+	}
+	if len(src.SkillsDirs) > 0 {
+		dst.SkillsDirs = append([]string(nil), src.SkillsDirs...)
+	}
+	if len(src.MCPServers) > 0 {
+		if dst.MCPServers == nil {
+			dst.MCPServers = make(map[string]mcp.ServerConfig)
+		}
+		for k, v := range src.MCPServers {
+			dst.MCPServers[k] = v
+		}
 	}
 }
 

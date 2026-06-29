@@ -1,168 +1,115 @@
+<!-- CHANGE_LOG: 2026-06-27 因 /od re 深度缺口分析同步更新: 新增 Phase 4 Cursor Agent 对标补齐计划 -->
 <!-- CHANGE_LOG: 2026-06-26 因需求变更同步更新: 新增 T18 ProjectAwarenessGuard + T19 TaskDispatcher + T20 组装测试 -->
 <!-- CHANGE_LOG: 2026-06-26 Phase 2 初始创建 -->
 
 # 02 — Task Plan
 
 ---
-total_tasks: 17
-parallel_groups: 5
-critical_path: T1 → T6 → T11 → T13 → T16
-frontend_impact: no
+branch: main
+last_updated: 2026-06-27
+phase: 4-gap-remediation
+complexity: L
+total_tasks: 12
+parallel_groups: 4
+critical_path: T21 → T22 → T24 → T26 → T30
+benchmark: Cursor Agent + 需求文档 v1.3/v2.0
 ---
 
-## Group 1 (并行 — 无前置依赖)
+## 现状摘要（/od re 2026-06-27）
 
-基础设施层，可同时开工。
+**已实现（可运行）**
+- Agent Loop、Classifier、StandardLoop、Context 摘要（120K/95%）
+- Legacy Guard：修改前扫描 + 写操作硬拦截（`guard.go` + `loop.go`）
+- TaskDispatcher + SubAgent 并行（DAG + semaphore + checkpoint）
+- TUI：Pipeline 步骤、Todo 面板、Thinking 折叠、权限弹窗、流式输出
+- 8 工具 + 权限分级 + 多 Provider + strict gateway
 
-- [ ] **T1** [config] 配置分层加载 · outputs: `internal/config/layers.go`
-  - 实现 CLI flags > env > 项目配置 > 全局配置 > 默认值 的优先级合并
-  - Config 结构已含 Provider/BaseURL/APIKey/Model/Timeout/LogLevel
+**核心缺口（对标 Cursor Agent + 需求文档）**
 
-- [ ] **T2** [session] Session.Entry 增强 + Store MD 导出 · outputs: `internal/session/session.go`, `internal/session/store.go`
-  - Entry 新增 State(string)、Tokens(int) 字段
-  - Store 新增 `Export(session) → .md` 方法（人类可读）
-
-- [ ] **T3** [permissions] TUI 弹窗确认逻辑 · outputs: `internal/permissions/prompt.go`
-  - `PromptChecker` 通过 channel 向 TUI 发送 `ConfirmRequestMsg`
-  - 超时默认拒绝（30s）
-
-- [ ] **T4** [stream] 流式解析 + 超时重试 · outputs: `internal/stream/stream.go`
-  - `RetryChat(ctx, provider, req, maxRetries) → Response` — 指数退避 1s/2s/4s
-  - SSE chunk 解析器
-
-- [ ] **T5** [agent] TUI 通信协议消息类型 · outputs: `internal/agent/messages.go`
-  - UserInputMsg, ConfirmResponseMsg, AgentStateMsg, StreamChunkMsg, ToolCallMsg, ToolResultMsg, ConfirmRequestMsg, ErrorMsg
-
----
-
-## Group 2 (并行 — 依赖 Group 1)
-
-LLM 实现层 + 工具系统。依赖 Config(T1)、Stream(T4)、Permissions(T3)。
-
-- [ ] **T6** [llm] OpenAI Provider 实现 + DeepSeek 封装 · outputs: `internal/llm/openai.go`, `internal/llm/deepseek.go`
-  - 基于 Config.BaseURL 构造 HTTP client
-  - 支持 Chat / Stream 两种模式
-  - Tool Call 解析（JSON → llm.ToolCall）
-  - DeepSeek 仅封装默认 BaseURL 和模型常量，复用 openai.go
-  - **depends**: T1, T4
-
-- [ ] **T7** [llm] Mock Provider 实现 · outputs: `internal/llm/mock.go`
-  - 预设对话脚本，支持 tool_call 模拟
-  - 用于单元测试，无网络依赖
-  - **depends**: T4
-
-- [ ] **T8** [tools] 只读工具集 · outputs: `internal/tools/read.go`
-  - list_dir(path) — 遍历目录树，返回文件列表
-  - read_file(path) — 读取文件完整内容
-  - search_file(pattern) — 按名称模糊匹配
-  - search_code(keyword, path) — 关键词/正则搜索
-  - 全部 LevelSafe，实现 Tool 接口
-  - **depends**: T3 (Level 常量), 现有 tools.Tool 接口
-
-- [ ] **T9** [tools] 文件写入工具集 · outputs: `internal/tools/write.go`
-  - write_file(path, content) — 新建/覆盖文件
-  - edit_file(path, old_snippet, new_snippet) — 增量替换
-  - 全部 LevelSafe
-  - **depends**: T3, 现有 tools.Tool 接口
-
-- [ ] **T10** [tools] 高危工具集 · outputs: `internal/tools/shell.go`, `internal/tools/delete.go`
-  - shell_exec(cmd, workdir) — 带 30s timeout 的 Shell 执行
-  - delete_file(path) — 删除文件/目录
-  - 全部 LevelDangerous
-  - **depends**: T3, 现有 tools.Tool 接口
+| 优先级 | 缺口 | 影响 |
+|--------|------|------|
+| P0 | 并行调度仅 `LayoutDDD` 触发，Legacy/Minimal 走单任务串行 | v2.0 §7 未覆盖主场景 |
+| P0 | 文件变更无 `+N -M` 行数展示 | Cursor 级 diff 反馈缺失 |
+| P0 | 无显式「需求分析」阶段 | 用户看不到分析→拆分→执行链路 |
+| P1 | Guard 扫描流程 ≠ §6.3 四步规范 | 理解流程与文档不一致 |
+| P1 | `max_parallel` 默认 2（spec 要求 4） | 并行度不足 |
+| P1 | Checkpoint Rollback 未暴露 TUI/CLI | v2.1 能力不可用 |
+| P1 | 运行时日志路径与 §3.4 文档冲突 | 验收风险 |
+| P2 | 无计划编辑、语义搜索、Git diff 工具 | Cursor 高级能力 |
+| P2 | `deliverables/` 验证截图缺失 | §4.3 未满足 |
 
 ---
 
-## Group 3 (并行 — 依赖 Group 2)
+## Phase 4 — Cursor Agent 对标补齐计划
 
-核心 Agent Loop + TUI 基础组件。
+### Group A — 调度与需求分析（P0，可部分并行）
 
-- [ ] **T11** [agent] Agent Loop 主循环 · outputs: `internal/agent/loop.go`
-  - 实现完整推理闭环：session → buildMessages → LLM → tool dispatch → 结果回传
-  - 状态机 6 态 (Idle/Thinking/Executing/WaitingApproval/Done/Error)
-  - 通过 T5 的消息类型与 TUI 通信（channel + tea.Msg）
-  - 高危工具调用前发 ConfirmRequestMsg，等待 ConfirmResponseMsg
-  - maxTurns 上限 + 终止判断
-  - **depends**: T5, T6, T8, T9, T10
+- [x] **T21** [agent] 解除 Dispatcher 的 DDD 门禁 · outputs: `internal/agent/loop.go`, `internal/agent/dispatcher.go`
+  - 规则：`code_modification` + 任务数 ≥2 或 LLM 判定「可并行」→ 走 Dispatcher
+  - Legacy 项目：Guard 扫描完成后再拆解（保持写拦截）
+  - Minimal 小任务（单文件）：仍允许单任务 fast path
+  - 默认 `max_parallel: 4`（对齐 v2.0 §7.2）
+  - **depends**: 现有 T18/T19
 
-- [ ] **T12** [tui] TUI 样式 + 子组件 · outputs: `internal/tui/styles.go`, `internal/tui/components/{titlebar,messages,input,confirm,status}.go`
-  - styles.go — Lipgloss 样式集中定义（title, status, user, agent, tool, error, prompt, help）
-  - titlebar.go — 紫色标题栏 + 状态标签
-  - messages.go — 可滚动消息列表（自动裁剪 + 流式追加）
-  - input.go — 输入行（可编辑 + 历史）
-  - confirm.go — 权限确认弹窗覆盖层（Y/N + 超时倒计时）
-  - status.go — 状态标签着色映射
-  - **depends**: T5 (消息类型用于渲染)
+- [x] **T22** [agent] 显式需求分析阶段 · outputs: `internal/agent/requirements.go`, `loop.go`, `messages.go`
+  - 在 Guard/Decompose 之前插入 LLM 调用：输出结构化摘要
+    - 用户诉求 / 验收标准 / 影响范围 / 风险点
+  - 注入 session + TUI status line（非 Thinking 折叠）
+  - TUI 新增 pipeline step：`StepAnalyze`（需求分析）
+  - **depends**: T21
 
----
+- [x] **T23** [agent] 任务计划可审阅 · outputs: `internal/tui/update.go`, `components/todolist.go`
+  - Decompose 完成后展示任务列表，用户 Enter 确认或 Esc 取消
+  - 可选：数字键跳过某子任务（P2 可延后）
+  - **depends**: T22
 
-## Group 4 (并行 — 依赖 Group 3)
+### Group B — 文件变更展示（P0，Cursor 对标核心）
 
-TUI 整合 + 主入口装配 + 严格网关兼容。
+- [x] **T24** [tools+tui] 文件变更行数统计
+- [x] **T25** [tui] 变更汇总面板
 
-- [ ] **T13** [tui] TUI 整合 — Update/View 全链路 · outputs: `internal/tui/update.go`, `internal/tui/render.go`
-  - update.go — 处理全部 tea.Msg 类型，连接 Agent goroutine
-  - render.go — View() 方法，组合所有子组件
-  - 重构现有 tui.go 为 model.go（保持 model struct）
-  - **depends**: T11, T12
+### Group C — Legacy 理解对齐（P1）
 
-- [ ] **T14** [cmd] main.go 完整装配线 · outputs: `cmd/omnidev-agent/main.go`
-  - Config → LLM Provider → Permissions → Tools Registry → Session → Agent → TUI
-  - 启动 Agent goroutine，TUI 主循环
-  - 退出信号处理（Ctrl+C 保存 session）
-  - **depends**: T1, T6, T11, T13
-
-- [ ] **T15** [llm] 结构化计划解析器 · outputs: `internal/llm/structured_plan.go`
-  - 解析 LLM 响应中的 structured plan JSON block
-  - 降级策略：解析失败 → 普通 function calling
-  - **depends**: T6
+- [x] **T26** [agent] Guard 扫描对齐 §6.3
+- [x] **T27** [agent+tui] Rollback 暴露
+- [x] **T28** [session] 运行时日志路径澄清（双目录文档对齐）
+- [x] **T29** [tests] 并行 + 变更展示集成测试
+- [x] **T30** [deliverables] 验证截图（README 清单）
+- [x] **T31** [tools] Git 状态/diff 工具
+- [x] **T32** [tools] 增强代码检索（rg 优先）
 
 ---
 
-## Group 5 (并行 — 依赖 Group 4)
+## 执行顺序建议
 
-测试 + 验证产物。
+```
+Week 1 (P0):  T24 → T25 → T21 → T22
+Week 2 (P1):  T26 → T23 → T27 → T29
+Week 3 (验收): T28(文档确认) → T30 → T31/T32(可选)
+```
 
-- [ ] **T16** [tests] 全量测试用例 · outputs: `tests/`
-  1. Agent 主循环完整流转（Mock LLM + 多轮推理）
-  2. 工具调用发起及结果回传链路
-  3. 高危操作权限确认 + 拒绝分支
-  4. 多层级配置读取优先级合并
-  5. Mock LLM 兼容适配
-  - **depends**: T7, T11, T14
+## 验收标准（Phase 4 完成定义）
 
-- [ ] **T17** [deliverables] 运行验证产物 · outputs: `deliverables/demo_screenshot/`
-  - 使用本 Agent 完成终端贪吃蛇小游戏开发
-  - 采集全流程 TUI 运行截图
-  - **depends**: T14, T16
+1. Legacy 仓库收到「多文件功能需求」时：先 Guard 理解 → 需求分析可见 → 任务拆分 → ≥2 子任务并行执行
+2. 每次 write/edit/delete 后 TUI 显示 `path (+N -M)`；Turn 结束有变更文件汇总
+3. `max_parallel` 默认 4，checkpoint 可 resume
+4. Guard 四步与 §6.3 一致（测试覆盖）
+5. `deliverables/demo_screenshot/` 有完整流程截图
 
 ---
 
-## Phase 3 Extension — v2.0 增强功能
+## 历史计划（Phase 1–3 + v2.0，已基本完成）
 
-total_extra_tasks: 3
-dependencies: Group 1-5 completed
+> 以下 T1–T20 为初版计划，多数已实现。保留作归档参考；新工作以 Phase 4（T21–T32）为准。
 
-- [ ] **T18** [agent] 历史项目理解拦截器 — ProjectAwarenessGuard · outputs: 
-  - 项目类型检测: Greenfield/Legacy/Mixed
-  - 四步理解流程自动执行 (list_dir → read_file(README) → search_code → read_file(入口))
-  - 硬拦截 write_file/edit_file/delete_file 直到 AwarenessComplete
-  - 超时 30s + Step 失败容错
-  - 理解结果注入 session context (role: system, [PROJECT ANALYSIS] prefix)
-  - **depends**: Group 1-5 completed
+<details>
+<summary>T1–T20 原始任务列表（点击展开）</summary>
 
-- [ ] **T19** [agent] SubAgent 并行调度引擎 — TaskDispatcher · outputs: 
-  - TaskPlanner: LLM-driven 任务拆解 (prompt: 输出 JSON )
-  - TaskGraph: DAG 依赖解析 → 找出无依赖的 root tasks
-  - RunParallel: sync.WaitGroup + goroutine per SubAgent, max 4 并行
-  - SubAgent: 独立 session context (继承父 Agent project understanding summary)
-  - 父 Agent 汇总所有 SubAgent 结果 → 生成最终回复
-  - 超时 120s/subagent, 10 turns max
-  - **depends**: T11, T18, Group 1-5 completed
+### Group 1–5 + Phase 3 Extension (T1–T20)
 
-- [ ] **T20** [cmd+tui+tests] 组装 + 测试 · outputs: , , 
-  - main.go: Guard + Dispatcher 装配到 Agent
-  - TUI: 并行任务进度展示 (multi-task progress bars)
-  - TUI: 项目理解状态指示 (scanning/complete)
-  - tests: Guard 拦截测试, Dispatcher 并行测试
-  - **depends**: T18, T19
+- T1–T17：配置/Session/LLM/Tools/Agent/TUI/Tests — **已完成**
+- T18 ProjectAwarenessGuard — **已完成**（需 T26 对齐 §6.3）
+- T19 TaskDispatcher — **已完成**（需 T21 解除 DDD 门禁）
+- T20 组装测试 — **部分完成**（需 T29 补充 Legacy 并行场景）
+
+</details>

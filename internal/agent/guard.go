@@ -77,6 +77,7 @@ type ProjectAwarenessGuard struct {
 	msgCh       chan<- tea.Msg
 	cwd         string
 	timeout     time.Duration
+	analysisMaxChars int
 	mu          sync.Mutex
 }
 
@@ -89,6 +90,7 @@ func NewProjectAwarenessGuard(toolbox *tools.Registry, sess *session.Session, cw
 		session:     sess,
 		cwd:         cwd,
 		timeout:     30 * time.Second,
+		analysisMaxChars: defaultGuardAnalysisMax,
 	}
 	g.projectType = g.detectProjectType()
 	if g.projectType == ProjectGreenfield {
@@ -99,6 +101,20 @@ func NewProjectAwarenessGuard(toolbox *tools.Registry, sess *session.Session, cw
 
 // SetMsgCh attaches a TUI message channel for progress reporting.
 func (g *ProjectAwarenessGuard) SetMsgCh(ch chan<- tea.Msg) { g.msgCh = ch }
+
+// SetSession replaces the session used for guard bookkeeping.
+func (g *ProjectAwarenessGuard) SetSession(sess *session.Session) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.session = sess
+}
+
+// SetAnalysisMaxChars caps [PROJECT ANALYSIS] size stored in session.
+func (g *ProjectAwarenessGuard) SetAnalysisMaxChars(n int) {
+	if n > 0 {
+		g.analysisMaxChars = n
+	}
+}
 
 // State returns the current guard state.
 func (g *ProjectAwarenessGuard) State() GuardState         { return g.state }
@@ -136,42 +152,38 @@ func (g *ProjectAwarenessGuard) RunScan(ctx context.Context) {
 	var analysis strings.Builder
 	analysis.WriteString("[PROJECT ANALYSIS]\n")
 
-	// Step 1: Recursive file tree (full picture, like Cursor's project indexing)
-	analysis.WriteString("1. Project file tree:\n")
-	tree := g.buildFileTree(timeoutCtx)
-	if len(tree) > 3000 {
-		tree = tree[:3000] + "\n... (truncated, " + fmt.Sprintf("%d", len(tree)) + " chars total)"
+	// §6.3 Step 1: list_dir
+	if !g.runStep(timeoutCtx, "list_dir", map[string]interface{}{"path": g.cwd}, &analysis, "1. Project directory (list_dir)") {
+		g.finishWithPartial(analysis.String())
+		return
 	}
-	analysis.WriteString(tree)
-	analysis.WriteString("\n\n")
 
-	// Step 2: Read README / build config for high-level understanding
+	// Step 2: read_file(README)
 	readmePath := g.findReadme()
 	if readmePath != "" {
-		g.runStep(timeoutCtx, "read_file", map[string]interface{}{"path": filepath.Join(g.cwd, readmePath)}, &analysis, "2. README / build config")
+		if !g.runStep(timeoutCtx, "read_file", map[string]interface{}{"path": filepath.Join(g.cwd, readmePath)}, &analysis, "2. README") {
+			g.finishWithPartial(analysis.String())
+			return
+		}
 	} else {
-		analysis.WriteString("2. README / build config: not found\n\n")
+		analysis.WriteString("2. README: not found\n\n")
 	}
 
-	// Step 3: Read entry point for architecture context
+	// Step 3: search_code (key patterns)
+	if !g.runStep(timeoutCtx, "search_code", map[string]interface{}{"query": "func main|package main|module ", "path": g.cwd}, &analysis, "3. Code search") {
+		g.finishWithPartial(analysis.String())
+		return
+	}
+
+	// Step 4: read_file(entry)
 	entryPath := g.findEntryFile()
 	if entryPath != "" {
-		g.runStep(timeoutCtx, "read_file", map[string]interface{}{"path": filepath.Join(g.cwd, entryPath)}, &analysis, "3. Entry point")
-	} else {
-		analysis.WriteString("3. Entry point: not detected\n\n")
-	}
-
-	// Step 4: Search for package/module declarations (understand boundaries)
-	g.runStep(timeoutCtx, "search_code", map[string]interface{}{"keyword": "^package |^import |^from |^use |^module ", "path": g.cwd}, &analysis, "4. Package/module structure")
-
-	// Step 5: Read key config files (dependency manifests, configs)
-	for _, cf := range g.findConfigFiles() {
-		select {
-		case <-timeoutCtx.Done():
-			break
-		default:
-			g.runStep(timeoutCtx, "read_file", map[string]interface{}{"path": filepath.Join(g.cwd, cf)}, &analysis, "5. Config: "+cf)
+		if !g.runStep(timeoutCtx, "read_file", map[string]interface{}{"path": filepath.Join(g.cwd, entryPath)}, &analysis, "4. Entry point") {
+			g.finishWithPartial(analysis.String())
+			return
 		}
+	} else {
+		analysis.WriteString("4. Entry point: not detected\n\n")
 	}
 
 	g.mu.Lock()
@@ -181,7 +193,7 @@ func (g *ProjectAwarenessGuard) RunScan(ctx context.Context) {
 	g.session.Add(session.Entry{
 		Timestamp: time.Now(),
 		Role:      "system",
-		Content:   analysis.String(),
+		Content:   CompressGuardAnalysis(analysis.String(), g.analysisMaxChars),
 		State:     "analyzed",
 	})
 
@@ -208,11 +220,7 @@ func (g *ProjectAwarenessGuard) runStep(ctx context.Context, toolName string, ar
 	result := tool.Execute(ctx, args)
 	analysis.WriteString(fmt.Sprintf("%s:\n", label))
 	if result.Success {
-		data := result.Data
-		if len(data) > 2000 {
-			data = data[:2000] + "\n... (truncated)"
-		}
-		analysis.WriteString(data)
+		analysis.WriteString(result.Data)
 	} else {
 		analysis.WriteString(fmt.Sprintf("(error: %s)", result.Error))
 	}
@@ -228,7 +236,7 @@ func (g *ProjectAwarenessGuard) finishWithPartial(analysis string) {
 	g.session.Add(session.Entry{
 		Timestamp: time.Now(),
 		Role:      "system",
-		Content:   analysis + "(partial — timed out)",
+		Content:   CompressGuardAnalysis(analysis+"(partial — timed out)", g.analysisMaxChars),
 		State:     "analyzed-partial",
 	})
 	if g.msgCh != nil {

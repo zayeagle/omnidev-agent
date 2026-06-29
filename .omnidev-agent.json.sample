@@ -10,7 +10,19 @@
   "max_turns":   20,
   "log_level":   "info",
   "session_dir": ".ai_history/sessions/",
-  "max_parallel": 2,
+  "context_max_tokens": 120000,
+  "context_summarize_threshold": 0.95,
+  "max_parallel": 4,
   "sub_agent_timeout": 120,
-  "sub_agent_max_turns": 10
+  "sub_agent_max_turns": 10,
+  "tool_result_max_chars": 8000,
+  "tool_spool_dir": ".ai_history/tool_spool/",
+  "search_code_max_lines": 100,
+  "list_dir_max_entries": 200,
+  "read_file_default_limit": 300,
+  "context_tool_results_keep_full": 3,
+  "guard_analysis_max_chars": 4000,
+  "pipeline_plan_mode": 0,
+  "skills_dirs": [".omnidev-agent/skills"],
+  "mcp_servers": {}
 }

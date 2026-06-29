@@ -7,7 +7,7 @@ func TestRenderTodoListBlockedAndDepends(t *testing.T) {
 		{ID: "1", Description: "Setup", Status: StatusSuccess},
 		{ID: "2", Description: "Build UI", Status: StatusBlocked, DependsOn: []string{"1"}},
 	}
-	lines := RenderTodoList(tasks, 80, false)
+	lines := RenderTodoList(tasks, 80, false, "Executing")
 	body := joinLines(lines)
 	if !containsSubstring(body, "waits on") {
 		t.Fatalf("expected dependency hint, got %q", body)
@@ -19,8 +19,8 @@ func TestRenderTodoListCollapseWhenAllDone(t *testing.T) {
 		{ID: "1", Description: "A", Status: StatusSuccess},
 		{ID: "2", Description: "B", Status: StatusSuccess},
 	}
-	lines := RenderTodoList(tasks, 80, true)
-	if len(lines) == 0 || !containsSubstring(lines[1], "all done") {
+	lines := RenderTodoList(tasks, 80, true, "Done")
+	if len(lines) == 0 || !containsSubstring(lines[0], "all done") {
 		t.Fatalf("expected collapsed header, got %v", lines)
 	}
 }

@@ -38,8 +38,9 @@ type ToolCallEntry struct {
 
 type Session struct {
 	mu      sync.RWMutex
-	ID      string  `json:"id"`
-	Entries []Entry `json:"entries"`
+	ID      string       `json:"id"`
+	Entries []Entry      `json:"entries"`
+	UI      *PersistedUI `json:"ui,omitempty"`
 }
 
 func New() *Session {
@@ -79,6 +80,22 @@ func (s *Session) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.Entries)
+}
+
+// EntriesCopy returns a snapshot of all entries.
+func (s *Session) EntriesCopy() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Entry, len(s.Entries))
+	copy(out, s.Entries)
+	return out
+}
+
+// ReplaceEntries replaces in-memory entries (e.g. after context compaction).
+func (s *Session) ReplaceEntries(entries []Entry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Entries = append([]Entry(nil), entries...)
 }
 
 // EntriesFrom returns a copy of entries starting at idx (inclusive).

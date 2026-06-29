@@ -20,6 +20,11 @@ func ErrResult(err string) *Result {
 	return &Result{Success: false, Error: err}
 }
 
+// LimitedResult applies PARTIAL/spool delivery budgets to tool output.
+func LimitedResult(toolName, content string) *Result {
+	return okLimited(toolName, content)
+}
+
 // Tool defines the contract for every tool callable by the LLM.
 type Tool interface {
 	Name() string

@@ -15,12 +15,14 @@ An autonomous terminal coding agent for diversified code generation and custom p
 |---------|-------------|
 | **TUI** | Cursor-style UI: task checklist, pipeline steps, collapsible thinking, completion banner, scrollable transcript |
 | **Headless mode** | `omnidev-agent -p "task"` for one-shot runs (CI / scripts) |
-| **Agent pipeline** | Intent classification → project assessment (legacy / greenfield) → task decomposition → parallel sub-agents → tool loop |
-| **8 built-in tools** | List dir, read file, file/code search, write/edit/delete file, shell exec |
+| **Agent pipeline** | Intent → project assess → **LLM task plan** (1 or N tasks) → parallel sub-agents → tool loop |
+| **Built-in tools** | List/read/search/write/edit/delete, shell, git status/diff |
+| **Skills** | Cursor-style `SKILL.md` workflows — `list_skills` / `load_skill`, TUI `/skills` `/skill` |
+| **MCP** | Model Context Protocol servers → dynamic tools (`mcp_<server>__<tool>`) |
 | **Permission model** | Read/write/search run automatically; shell, delete, etc. require **Y/N/A** confirmation (`/yolo` or `--yolo` to disable) |
 | **Multi-LLM** | OpenAI Chat Completions, DeepSeek (compatible), Anthropic Messages API |
 | **Gateway compat** | `compat_mode: strict` for enterprise gateways (merged system, no temperature, etc.) |
-| **Context management** | Auto-summarize long sessions (configurable token limit and threshold) |
+| **Context management** | Footer shows same token estimate as compaction; auto-summarize at 95% (configurable) |
 | **Checkpoint** | Resume or start fresh after interrupted multi-task runs |
 | **Session persistence** | Runtime snapshots under `.ai_history/sessions/` |
 
@@ -118,7 +120,8 @@ The agent itself does **not** require `git`, `rg`, `grep`, or Node installed —
 | Path / action | Purpose |
 |---------------|---------|
 | **Current working directory** | Project root the agent reads and writes; run `omnidev-agent` from your repo or task folder. |
-| `.omnidev-agent.json` | Project config (create with `make config`). |
+| `.omnidev-agent.json` | Optional **project** override (`make config-local`); used when cwd is the project root. |
+| `~/.omnidev-agent/config.json` (or `%USERPROFILE%\.omnidev-agent\config.json` on Windows) | **Global** config (`make config` / `make deploy` / `install.ps1`). Resolved via `os.UserHomeDir()`. |
 | `.ai_history/sessions/` | Session snapshots (auto-created). |
 | `.ai_history/checkpoints/` | Multi-task checkpoints (auto-created). |
 | `deliverables/` | Default output workspace for new/greenfield projects. |
@@ -139,34 +142,46 @@ HTTP_PROXY / HTTPS_PROXY  # optional corporate proxy (Go standard)
 
 ## Quick Start
 
+**Goal: install once and run from any directory** — pick your OS in [Build & deploy](#build--deploy) and run the listed command first.
+
+**Goal: hack on omnidev-agent in this repo** (build/run without installing):
+
 ```bash
-# 1. Clone
 git clone https://github.com/zayeagle/omnidev-agent.git
 cd omnidev-agent
-
-# 2. Initialize config (copy from sample; secrets are gitignored)
-make config
-
-# 3. Edit API key and model
-vim .omnidev-agent.json
-
-# 4. Build and run TUI
-make run
+make config-local          # optional project override in ./.omnidev-agent.json
+make config              # or global ~/.omnidev-agent/config.json
+# edit the config file you created — set api_key, provider, model
+make run                   # build bin/omnidev-agent and start TUI
 ```
 
 ---
 
-## Deployment
+## Build & deploy
 
-### Linux / macOS (recommended)
+Choose **one** row for your environment. All paths use the OS user home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows).
+
+| Environment | Command / script | Prerequisites | Installed binary | Global config | Project config (optional) |
+|-------------|------------------|---------------|------------------|---------------|---------------------------|
+| **Linux** | `make deploy` | Go 1.24.5+, `make`, `bash` | `~/.local/bin/omnidev-agent` | `~/.omnidev-agent/config.json` | `./.omnidev-agent.json` (repo root, if missing) |
+| **macOS** | `make deploy` | Same as Linux | Same as Linux | Same as Linux | Same as Linux |
+| **Windows (PowerShell)** | `.\scripts\install.ps1` | Go 1.24.5+ | `%USERPROFILE%\.local\bin\omnidev-agent.exe` | `%USERPROFILE%\.omnidev-agent\config.json` | `.\.omnidev-agent.json` (repo root, if missing) |
+| **Windows (Git Bash)** | `make deploy` | Go, `make`, Git Bash | `~/.local/bin/omnidev-agent.exe` | `~/.omnidev-agent/config.json` | `./.omnidev-agent.json` |
+| **WSL** | `make deploy` | Go, `make`, `bash` inside WSL | `~/.local/bin/omnidev-agent` | `~/.omnidev-agent/config.json` | `./.omnidev-agent.json` |
+
+`make deploy` and `install.ps1` both: force rebuild → install binary → create global + project config from `.omnidev-agent.json.sample` (skip if file already exists) → print paths and [config priority](#configuration).
+
+### Linux / macOS
 
 ```bash
-make deploy          # rebuild + install to ~/.local/bin/omnidev-agent + make config
-export PATH="$HOME/.local/bin:$PATH"
-omnidev-agent
+cd omnidev-agent
+make deploy
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc to persist
+# edit ~/.omnidev-agent/config.json
+omnidev-agent                          # any directory
 ```
 
-Update on a remote machine:
+Update after `git pull`:
 
 ```bash
 cd ~/path/to/omnidev-agent
@@ -175,28 +190,45 @@ make deploy
 omnidev-agent --version
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell) — recommended on native Windows
 
 ```powershell
-.\scripts\install.ps1    # build, install to %USERPROFILE%\.local\bin, update PATH
-omnidev-agent
+cd omnidev-agent
+.\scripts\install.ps1
+# edit %USERPROFILE%\.omnidev-agent\config.json
+omnidev-agent                          # any directory (restart terminal if PATH was just added)
 ```
+
+### Windows (Git Bash) or WSL
+
+Same as Linux — use `make deploy` inside Git Bash or your WSL distro. Do **not** mix a Windows `.exe` with a WSL project tree unless you know what you are doing; prefer one environment per checkout.
 
 ### Build only (no install)
 
+| Environment | Command | Output |
+|-------------|---------|--------|
+| Linux / macOS / Git Bash / WSL | `make build` | `bin/omnidev-agent` |
+| Windows PowerShell | `go build -o bin\omnidev-agent.exe ./cmd/omnidev-agent` | `bin\omnidev-agent.exe` |
+
+Run from the repo without installing:
+
 ```bash
-make build             # → bin/omnidev-agent
-./bin/omnidev-agent
+./bin/omnidev-agent          # Unix
+.\bin\omnidev-agent.exe      # Windows PowerShell
 ```
 
-### Cross-compile
+### Cross-compile (release artifacts)
+
+From Linux, macOS, Git Bash, or WSL (requires `make` + `bash`):
 
 ```bash
 make build-linux-amd64
 make build-darwin-arm64
-make build-windows-amd64
-make build-all         # all platforms
+make build-windows-amd64     # → bin/omnidev-agent-windows-amd64.exe
+make build-all               # all 6 platform/arch pairs
 ```
+
+Copy the artifact to the target machine and place config at that OS user home: `~/.omnidev-agent/config.json` or `%USERPROFILE%\.omnidev-agent\config.json`.
 
 ---
 
@@ -210,6 +242,8 @@ omnidev-agent
 
 Enter a natural-language task, e.g. `Implement a snake game in deliverables/snake-game/`.
 
+For **code modification** requests, the agent calls an LLM **task planner** by default (`pipeline_plan_mode: 0`). The planner autonomously returns either **one task** (simple work) or **multiple sub-tasks** with dependencies (complex / parallel work). Multi-task plans show in the TUI for confirmation before sub-agents run. Set `pipeline_plan_mode: 2` only if you want to skip planning and always run a single main-agent loop.
+
 **Built-in commands**
 
 | Command | Description |
@@ -218,9 +252,11 @@ Enter a natural-language task, e.g. `Implement a snake game in deliverables/snak
 | `/status` | Agent, model, and permission status |
 | `/model` | Current model and provider |
 | `/checkpoint` | View in-progress checkpoint |
-| `/sessions` | List archived sessions |
-| `/session <file>` | Preview an archive |
+| `/sessions` | List recent sessions (first prompt, message/tool counts) |
+| `/session <id>` | Preview a saved session (exchanges + stats) |
 | `/clear` | Clear transcript |
+| `/skills` | List loaded agent skills |
+| `/skill <name>` | Load a skill into session context (see [Skills & MCP](#skills--mcp)) |
 | `/yolo` | Toggle permission mode (confirm / auto-approve all) |
 | `quit` / `exit` / `Ctrl+C` | Exit |
 
@@ -267,8 +303,11 @@ Dangerous operations are **denied by default** in headless mode; `--yolo` matche
 
 ## Configuration
 
-omnidev-agent reads `.omnidev-agent.json` from the **current working directory**.  
-The sample file `.omnidev-agent.json.sample` is committed; `make config` copies it locally (gitignored) so secrets are never committed.
+**Project config** — file `.omnidev-agent.json` in the **current working directory** (only when you run from that directory).
+
+**Global config** — `<user-home>/.omnidev-agent/config.json`, where user home is from `os.UserHomeDir()` (`$HOME` on Linux/macOS/Git Bash/WSL, `%USERPROFILE%` on Windows). This matches paths created by `make deploy` and `scripts/install.ps1`.
+
+The sample `.omnidev-agent.json.sample` is committed; generated configs are gitignored.
 
 **Merge priority (highest → lowest)**
 
@@ -277,7 +316,7 @@ The sample file `.omnidev-agent.json.sample` is committed; `make config` copies 
 | 1 | CLI flags | `--model gpt-4o` |
 | 2 | Environment variables | `OMNIDEV_MODEL=gpt-4o` |
 | 3 | Project config | `./.omnidev-agent.json` |
-| 4 | Global config | `~/.omnidev-agent/config.json` |
+| 4 | Global config | `~/.omnidev-agent/config.json` (Windows: `%USERPROFILE%\.omnidev-agent\config.json`) |
 | 5 | Built-in defaults | See table below |
 
 ### Full reference
@@ -295,14 +334,112 @@ The sample file `.omnidev-agent.json.sample` is committed; `make config` copies 
 | `max_turns` | `OMNIDEV_MAX_TURNS` | `20` | Max agent tool-loop turns |
 | `log_level` | `OMNIDEV_LOG_LEVEL` | `info` | Log level |
 | `session_dir` | `OMNIDEV_SESSION_DIR` | `.ai_history/sessions/` | **Runtime** session snapshots |
-| `context_max_tokens` | `OMNIDEV_CONTEXT_MAX_TOKENS` | `120000` | Context window cap |
-| `context_summarize_threshold` | `OMNIDEV_CONTEXT_SUMMARIZE_THRESHOLD` | `0.95` | Fraction of cap before summarization |
-| `max_parallel` | `OMNIDEV_MAX_PARALLEL` | `2` | Parallel sub-agent count |
+| `context_max_tokens` | `OMNIDEV_CONTEXT_MAX_TOKENS` | `120000` | Context window cap (token estimate) |
+| `context_summarize_threshold` | `OMNIDEV_CONTEXT_SUMMARIZE_THRESHOLD` | `0.95` | Compress early history when usage exceeds this fraction of cap (**95%** default) |
+| `max_parallel` | `OMNIDEV_MAX_PARALLEL` | `4` | Parallel sub-agent count |
 | `sub_agent_timeout` | `OMNIDEV_SUB_AGENT_TIMEOUT` | `120` | Sub-task timeout (seconds) |
-| `sub_agent_max_turns` | `OMNIDEV_SUB_AGENT_MAX_TURNS` | `10` | Max turns per sub-agent |
+| `sub_agent_max_turns` | `OMNIDEV_SUB_AGENT_MAX_TURNS` | `10` | Max LLM↔tool turns per sub-agent |
+| `sub_agent_max_retries` | `OMNIDEV_SUB_AGENT_MAX_RETRIES` | `0` | Re-run a failed sub-task up to N extra times |
+| `llm_max_retries` | `OMNIDEV_LLM_MAX_RETRIES` | `3` | LLM API retries after the first attempt (4 calls total) |
+| `llm_retry_backoff_sec` | `OMNIDEV_LLM_RETRY_BACKOFF_SEC` | `1,2,4` | Seconds to wait before each LLM retry (comma-separated) |
+| `max_consecutive_tool_denials` | `OMNIDEV_MAX_CONSECUTIVE_TOOL_DENIALS` | `3` | Abort after N turns with denied tools; `0` = never abort |
+| `tool_result_max_chars` | `OMNIDEV_TOOL_RESULT_MAX_CHARS` | `8000` | Inline char budget per tool result sent to the LLM |
+| `tool_spool_dir` | `OMNIDEV_TOOL_SPOOL_DIR` | `.ai_history/tool_spool/` | Full tool payloads when output exceeds inline budget |
+| `search_code_max_lines` | `OMNIDEV_SEARCH_CODE_MAX_LINES` | `100` | Max match lines for `search_code` before PARTIAL |
+| `list_dir_max_entries` | `OMNIDEV_LIST_DIR_MAX_ENTRIES` | `200` | Max directory entries before PARTIAL |
+| `read_file_default_limit` | `OMNIDEV_READ_FILE_DEFAULT_LIMIT` | `300` | Default lines when `read_file` omits `limit` |
+| `context_tool_results_keep_full` | `OMNIDEV_CONTEXT_TOOL_RESULTS_KEEP_FULL` | `3` | Only the last N tool results stay full in LLM context; older ones become refs |
+| `context_min_keep_entries` | `OMNIDEV_CONTEXT_MIN_KEEP_ENTRIES` | `10` | Recent entries kept verbatim during compaction |
+| `guard_analysis_max_chars` | `OMNIDEV_GUARD_ANALYSIS_MAX_CHARS` | `4000` | Cap `[PROJECT ANALYSIS]` stored in session |
+| `pipeline_use_llm_classifier` | `OMNIDEV_PIPELINE_USE_LLM_CLASSIFIER` | `false` | LLM intent classification (default: strict chat heuristics) |
+| `pipeline_use_llm_requirements` | `OMNIDEV_PIPELINE_USE_LLM_REQUIREMENTS` | `false` | LLM requirements pass before decomposition |
+| `pipeline_use_llm_complexity` | `OMNIDEV_PIPELINE_USE_LLM_COMPLEXITY` | `false` | LLM layout classifier (default: keyword heuristic) |
+| `pipeline_plan_mode` | `OMNIDEV_PIPELINE_PLAN_MODE` | `0` | `0`=LLM decides 1 vs N tasks (default), `1`=same as 0, `2`=skip plan (always single task) |
+| `skills_dirs` | — | see [Skills](#skills--mcp) | Extra directories to scan for `SKILL.md` |
+| `mcp_servers` | — | — | MCP stdio servers → dynamic agent tools |
 
 > `OMNIDEV_LOG_DIR` is a legacy alias for `session_dir`.  
 > `session_dir` stores **omnidev-agent runtime** snapshots only. Cursor/Codex dev collaboration logs use `.ai_history/logs/` (see `AGENTS.md`).
+
+### Retry & execution limits
+
+These settings control how the agent recovers from transient failures and when it stops trying.
+
+| Layer | Config | Default behavior |
+|-------|--------|------------------|
+| **LLM API** | `llm_max_retries`, `llm_retry_backoff_sec` | On network/5xx errors, retry up to 3 times with 1s / 2s / 4s backoff. 4xx errors are not retried. Set `llm_max_retries` to `0` for a single attempt. |
+| **Main agent loop** | `max_turns` | Up to 20 rounds of LLM ↔ tool execution per user turn. Tool failures are fed back to the model within this budget (not a separate retry counter). |
+| **Sub-agent** | `sub_agent_max_turns`, `sub_agent_timeout` | Each parallel sub-task gets up to 10 tool-loop turns and 120s wall time. |
+| **Sub-task failure** | `sub_agent_max_retries` | When a sub-task exits with error, re-run it from scratch up to N additional times (`0` = no retry). |
+| **Permission denials** | `max_consecutive_tool_denials` | Abort after 3 consecutive turns where the user denied tool operations. Set to `0` to disable this guard. |
+
+Environment example for a more aggressive retry profile:
+
+```bash
+export OMNIDEV_LLM_MAX_RETRIES=5
+export OMNIDEV_LLM_RETRY_BACKOFF_SEC=2,4,8,16,32
+export OMNIDEV_SUB_AGENT_MAX_RETRIES=2
+export OMNIDEV_MAX_CONSECUTIVE_TOOL_DENIALS=5
+```
+
+### Tool output (PARTIAL + spool)
+
+Large tool outputs are **never silently dropped**. When a result exceeds `tool_result_max_chars`, the agent:
+
+1. Writes the **full payload** to `tool_spool_dir` (or references the original file path for `read_file`).
+2. Returns a **head+tail preview** with a `[PARTIAL …]` banner and an explicit **Continue** hint (offset/limit pagination or `read_file` on the spool path).
+
+| Tool | Continuation |
+|------|----------------|
+| `read_file` | `offset` + `limit` (1-based lines) |
+| `search_code` / `list_dir` | Narrow query/path; capped by `search_code_max_lines` / `list_dir_max_entries` |
+| `shell_exec`, `git_*` | `read_file` on spool path |
+
+```bash
+export OMNIDEV_TOOL_RESULT_MAX_CHARS=8000
+export OMNIDEV_TOOL_SPOOL_DIR=.ai_history/tool_spool/
+```
+
+### Token optimization (defaults on)
+
+These behaviors reduce context size **without dropping data** (PARTIAL/spool still applies):
+
+| Mechanism | What it does |
+|-----------|----------------|
+| **Pipeline heuristics** | Skips classifier / requirements / complexity LLM by default |
+| **Task plan (default)** | LLM planner decides 1 task vs multi-task split; set `pipeline_plan_mode: 2` to skip |
+| **Write arg slimming** | `write_file` / `edit_file` tool-call args stored as `[omitted N chars]` — not re-sent every turn |
+| **Tool result aging** | Only last 3 tool results stay full; older ones become one-line reload refs |
+| **Guard condensation** | `[PROJECT ANALYSIS]` compressed before session storage |
+| **Sub-agent parent hint** | Sub-tasks receive condensed project summary + parent user request |
+| **Compaction input slim** | Early history summarized using archived refs, not full tool payloads |
+| **Tighter tool caps** | 8k inline, 300-line read default, 100 search lines, 200 list entries |
+
+Re-enable optional LLM pipeline stages when you need them:
+
+```bash
+export OMNIDEV_PIPELINE_USE_LLM_REQUIREMENTS=true
+```
+
+Skip task planning entirely (always one task, saves one LLM call):
+
+```bash
+export OMNIDEV_PIPELINE_PLAN_MODE=2
+```
+
+### Context window
+
+When estimated tokens exceed `context_max_tokens × context_summarize_threshold`, older messages are summarized via LLM into a single `[EARLY CONTEXT SUMMARY]` entry (recent 10 entries are kept verbatim). The footer context % uses the same estimator and cap.
+
+| Setting | Default | Example override |
+|---------|---------|------------------|
+| `context_max_tokens` | `120000` | `"context_max_tokens": 200000` |
+| `context_summarize_threshold` | `0.95` (95%) | `"context_summarize_threshold": 0.90` for 90% |
+
+```bash
+export OMNIDEV_CONTEXT_MAX_TOKENS=120000
+export OMNIDEV_CONTEXT_SUMMARIZE_THRESHOLD=0.90
+```
 
 ### Sample config
 
@@ -319,16 +456,42 @@ The sample file `.omnidev-agent.json.sample` is committed; `make config` copies 
   "max_turns":   20,
   "log_level":   "info",
   "session_dir": ".ai_history/sessions/",
-  "max_parallel": 2,
+  "context_max_tokens": 120000,
+  "context_summarize_threshold": 0.95,
+  "max_parallel": 4,
   "sub_agent_timeout": 120,
-  "sub_agent_max_turns": 10
+  "sub_agent_max_turns": 10,
+  "sub_agent_max_retries": 0,
+  "tool_result_max_chars": 8000,
+  "tool_spool_dir": ".ai_history/tool_spool/",
+  "search_code_max_lines": 100,
+  "list_dir_max_entries": 200,
+  "read_file_default_limit": 300,
+  "context_tool_results_keep_full": 3,
+  "guard_analysis_max_chars": 4000,
+  "pipeline_plan_mode": 0,
+  "skills_dirs": [".omnidev-agent/skills"],
+  "mcp_servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "tool_level": "dangerous",
+      "disabled": true
+    }
+  },
+  "llm_max_retries": 3,
+  "llm_retry_backoff_sec": [1, 2, 4],
+  "max_consecutive_tool_denials": 3
 }
 ```
 
-### Global config (optional)
+### Global config
+
+Created automatically by `make deploy` / `make config` / `scripts/install.ps1` if missing:
 
 ```json
-// ~/.omnidev-agent/config.json
+// Linux/macOS/WSL/Git Bash: ~/.omnidev-agent/config.json
+// Windows:               %USERPROFILE%\.omnidev-agent\config.json
 {
   "base_url": "https://your-proxy.com/v1",
   "api_key":  "sk-shared-key",
@@ -346,10 +509,14 @@ export OMNIDEV_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
 export OMNIDEV_MODEL=deepseek-chat
 export OMNIDEV_TIMEOUT=120
 export OMNIDEV_MAX_TURNS=20
+export OMNIDEV_LLM_MAX_RETRIES=3
+export OMNIDEV_LLM_RETRY_BACKOFF_SEC=1,2,4
+export OMNIDEV_SUB_AGENT_MAX_RETRIES=0
+export OMNIDEV_MAX_CONSECUTIVE_TOOL_DENIALS=3
 export OMNIDEV_LOG_LEVEL=debug
 export OMNIDEV_SESSION_DIR=.ai_history/sessions/
 export OMNIDEV_COMPAT_MODE=auto
-export OMNIDEV_MAX_PARALLEL=2
+export OMNIDEV_MAX_PARALLEL=4
 export OMNIDEV_SUB_AGENT_TIMEOUT=120
 export OMNIDEV_SUB_AGENT_MAX_TURNS=10
 export OMNIDEV_CONTEXT_MAX_TOKENS=120000
@@ -432,8 +599,111 @@ Request URL: `{base_url}/chat/completions` (OpenAI-style) or Anthropic Messages 
 | `edit_file` | **Confirm** | Replace snippet (dialog shows diff preview) |
 | `delete_file` | **Confirm** | Delete file |
 | `shell_exec` | **Confirm** | Run shell command |
+| `list_skills` | Auto | List loaded SKILL.md workflows |
+| `load_skill` | Auto | Load skill instructions into context |
+| `mcp_*` | Configurable | External MCP server tools (`tool_level` in config) |
 
 On legacy repos the agent scans the project before making changes. Greenfield / new-project code goes under `deliverables/` by default to avoid polluting the repo root.
+
+---
+
+## Skills & MCP
+
+### Skills (SKILL.md)
+
+Skills are reusable instruction packs (compatible with Cursor-style `SKILL.md` layout). The agent discovers them at startup and exposes two tools:
+
+| Tool | Permission | Description |
+|------|------------|-------------|
+| `list_skills` | Auto | List loaded skills with descriptions |
+| `load_skill` | Auto | Load full skill instructions into the conversation |
+
+**Search paths** (first match wins on name collision; project overrides global):
+
+1. Paths in config `skills_dirs` (if set)
+2. Default: `~/.omnidev-agent/skills/<name>/SKILL.md`
+3. Default: `.omnidev-agent/skills/<name>/SKILL.md` (project-local)
+
+**TUI**
+
+```text
+/skills              # list loaded skills
+/skill example       # inject skill body into session as [SKILL: example]
+```
+
+**Layout example**
+
+```
+.omnidev-agent/skills/
+└── my-workflow/
+    └── SKILL.md      # name = directory "my-workflow"
+```
+
+A sample skill ships at `.omnidev-agent/skills/example/SKILL.md`.
+
+**Config**
+
+```json
+{
+  "skills_dirs": [
+    ".omnidev-agent/skills",
+    "/shared/team-skills"
+  ]
+}
+```
+
+Ask the agent naturally: *"load the example skill and follow it"* — it will call `load_skill`.
+
+### MCP (Model Context Protocol)
+
+Connect external MCP servers over **stdio**; their tools are registered as `mcp_<server>__<tool_name>` (e.g. `mcp_playwright__browser_navigate`).
+
+**Config** (global or project `.omnidev-agent.json`):
+
+```json
+{
+  "mcp_servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "tool_level": "dangerous",
+      "cwd": ".",
+      "env": {},
+      "disabled": false
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "tool_level": "safe"
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `command` | Executable to spawn (must speak MCP over stdin/stdout) |
+| `args` | Arguments passed to the command |
+| `env` | Extra environment variables |
+| `cwd` | Working directory for the subprocess |
+| `tool_level` | `safe` (auto-run) or `dangerous` (confirm in TUI; denied in headless unless `--yolo`) |
+| `disabled` | Skip this server when `true` |
+
+**Runtime**
+
+- Servers start when omnidev-agent launches; failures are logged and skipped (other servers continue).
+- MCP tool output uses the same **PARTIAL + spool** limits as built-in tools.
+- `/status` shows connected MCP servers and tool counts.
+
+**Requirements**
+
+- The MCP server binary must be on `PATH` (or use full path in `command`).
+- Node-based servers typically need `npx` / `node` installed.
+- Headless: MCP tools with `tool_level: dangerous` follow the same rules as `shell_exec` (use `--yolo` to auto-approve).
+
+**Disable MCP**
+
+Omit `mcp_servers` or set `"disabled": true` per server.
 
 ---
 
@@ -468,6 +738,8 @@ export OMNIDEV_MAX_PARALLEL=1
 
 ## Make targets
 
+Linux, macOS, Git Bash, and WSL only (native Windows PowerShell: use `scripts/install.ps1` instead of `make deploy`).
+
 ```
 make                   vet + build + test
 make build             Build → bin/omnidev-agent
@@ -475,10 +747,11 @@ make rebuild           Force full rebuild
 make run               Build and run TUI
 make test              Run tests
 make vet               go vet
-make clean             Remove build artifacts
-make install           Install to ~/.local/bin
-make config            Init .omnidev-agent.json from .sample
-make deploy            rebuild + install + config
+make clean             Remove bin/
+make install           Build and install to ~/.local/bin
+make config            Init global config (~/.omnidev-agent/config.json)
+make config-local      Init project config (./.omnidev-agent.json)
+make deploy            rebuild + install + global & project config
 make build-all         Cross-compile all platforms
 make help              Show help
 ```
@@ -492,6 +765,8 @@ cmd/omnidev-agent/     Entry, TUI launcher, headless, CLI
 internal/agent/        Agent loop, classify, decompose, checkpoint, sub-agents
 internal/llm/          OpenAI / Anthropic providers, gateway adapters
 internal/tools/        Tool registry and implementations
+internal/skills/       SKILL.md catalog loader
+internal/mcp/          MCP stdio client and tool bridge
 internal/tui/          Bubbletea UI
 internal/config/       Layered config loading
 internal/session/      Session store and export

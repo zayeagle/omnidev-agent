@@ -27,8 +27,12 @@ func (t *deleteFileTool) Execute(ctx context.Context, args map[string]interface{
 	if path == "" {
 		return ErrResult("path is required")
 	}
+	var removed int
+	if data, err := os.ReadFile(path); err == nil {
+		removed = LineCount(string(data))
+	}
 	if err := os.RemoveAll(path); err != nil {
 		return ErrResult(err.Error())
 	}
-	return OkResult("deleted " + path)
+	return OkResult(FormatChange("deleted", path, 0, removed))
 }

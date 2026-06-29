@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/zayeagle/omnidev-agent/internal/agent"
 	"github.com/zayeagle/omnidev-agent/internal/config"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
+	"github.com/zayeagle/omnidev-agent/internal/session"
 	"github.com/zayeagle/omnidev-agent/internal/tui/components"
 )
 
@@ -15,6 +17,7 @@ import (
 type model struct {
 	agent        *agent.Agent
 	guard        *agent.ProjectAwarenessGuard
+	sessionStore *session.Store
 	cfg    *config.Config
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -36,12 +39,19 @@ type model struct {
 	confirmReply       chan<- permissions.ConfirmResponse
 	confirmTimeout     int
 
+	// Line index (0-based) in View output for click-to-expand tasks under completion
+	tasksToggleAtLine int
+
 	// Checkpoint resume prompt
 	checkpointing      bool
 	checkpointPhase    string
 	checkpointDone     int
 	checkpointTotal    int
 	checkpointReply    chan<- agent.CheckpointResponse
+
+	// Task plan confirmation (after decomposition)
+	planConfirming   bool
+	planConfirmReply chan<- agent.TaskPlanConfirmResponse
 
 	// Agent message channel (for continued reading)
 	agentCh <-chan tea.Msg
@@ -54,29 +64,57 @@ type model struct {
 }
 
 // New creates the top-level TUI model.
-func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard, version, buildTime string) tea.Model {
-	return &model{
+func New(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard, store *session.Store, version, buildTime string) tea.Model {
+	m := &model{
 		agent:        a,
 		guard:        guard,
+		sessionStore: store,
 		cfg:          cfg,
 		input:        components.NewInputLine(),
 		turns:        components.NewTurnList(50),
 		version:      version,
 		buildTime:    buildTime,
 	}
+	m.restoreFromActiveSession()
+	return m
+}
+
+func (m *model) restoreFromActiveSession() {
+	sess := m.agent.Session()
+	if sess == nil || sess.Count() == 0 {
+		return
+	}
+	if ui := sess.UI; ui != nil && len(ui.Turns) > 0 {
+		m.turnCount = restoreUI(m.turns, ui)
+		if ui.OutputDir != "" {
+			m.agent.SetOutputDir(ui.OutputDir)
+		}
+		return
+	}
+	m.turnCount = hydrateTurnsFromEntries(m.turns, sess.EntriesCopy())
 }
 
 func (m *model) headerInfo() components.HeaderInfo {
-	modelName := m.cfg.Model
-	if modelName == "" {
-		modelName = "Auto"
-	}
 	return components.HeaderInfo{
-		Version:    m.version,
-		BuildTime:  m.buildTime,
-		AgentState: m.agentState,
-		Model:      modelName,
+		Version:   m.version,
+		BuildTime: m.buildTime,
 	}
+}
+
+// pinnedTodoStatus returns the live status shown on the To-dos header line.
+func (m *model) pinnedTodoStatus() string {
+	if m.confirming {
+		return "Waiting approval"
+	}
+	if m.isWorking() {
+		if label := m.workingLabel(); label != "" {
+			return label
+		}
+	}
+	if s := strings.TrimSpace(m.agentState); s != "" && s != "Idle" {
+		return s
+	}
+	return ""
 }
 
 // Init is called once when the program starts.
@@ -121,10 +159,7 @@ func (m *model) workingLabel() string {
 }
 
 func (m *model) footerExtra() string {
-	if m.agent != nil && !m.agent.Permissions().Interactive() {
-		return "yolo"
-	}
-	return ""
+	return m.permissionModeLabel()
 }
 
 // pinTasksTurn returns the active turn whose task list is pinned above the scroll area.
@@ -133,24 +168,40 @@ func (m *model) pinTasksTurn() *components.Turn {
 	if t == nil || len(t.Tasks) == 0 || t.HasCompletion() {
 		return nil
 	}
-	if m.isWorking() || t.FinalStatus == components.TurnDone {
-		return t
+	if !m.isWorking() {
+		return nil
 	}
-	return nil
+	return t
 }
+
+func (m *model) dialogOverlayHeight() int {
+	w := effectiveWidth(m.width)
+	var dialog string
+	switch {
+	case m.confirming:
+		dialog = components.ConfirmDialog(w, m.confirmLevel, m.confirmDescription, m.confirmPreview, m.confirmTimeout)
+	case m.checkpointing:
+		dialog = components.CheckpointDialog(w, m.checkpointPhase, m.checkpointDone, m.checkpointTotal)
+	case m.planConfirming:
+		taskCount := 0
+		if t := m.currentTurn(); t != nil {
+			taskCount = len(t.Tasks)
+		}
+		dialog = components.PlanConfirmDialog(w, taskCount)
+	default:
+		return components.ConfirmDialogHeight
+	}
+	return renderedLineCount(components.ConfirmOverlay(w, dialog))
+}
+
 func (m *model) contentViewportHeight() int {
 	h := m.height
 	if h < 10 {
 		h = 24
 	}
 	reserved := m.headerLineCount() + 2
-	if m.confirming {
-		reserved += components.ConfirmDialogHeight
-		if m.isWorking() {
-			reserved += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), effectiveWidth(m.width)))
-		}
-	} else if m.checkpointing {
-		reserved += components.ConfirmDialogHeight
+	if m.confirming || m.checkpointing || m.planConfirming {
+		reserved += m.dialogOverlayHeight()
 		if m.isWorking() {
 			reserved += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), effectiveWidth(m.width)))
 		}
@@ -169,7 +220,7 @@ func (m *model) transcriptViewportHeight() int {
 	h := m.contentViewportHeight()
 	if pin := m.pinTasksTurn(); pin != nil {
 		w := effectiveWidth(m.width)
-		sticky := len(components.TaskPanelLines(pin, w)) + 1
+		sticky := len(components.TaskPanelLines(pin, w, m.pinnedTodoStatus())) + 1
 		h -= sticky
 		if h < 3 {
 			h = 3

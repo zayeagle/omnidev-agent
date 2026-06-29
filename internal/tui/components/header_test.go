@@ -47,7 +47,7 @@ func TestFooterBar_Wraps(t *testing.T) {
 
 func TestFooterExitHint(t *testing.T) {
 	out := FooterExitHint(80)
-	if !strings.Contains(out, "quit") || !strings.Contains(out, "Ctrl+C") {
-		t.Fatalf("exit hint missing quit/Ctrl+C:\n%s", out)
+	if !strings.Contains(out, "quit") || !strings.Contains(out, "Ctrl+C") || !strings.Contains(out, "Ctrl+Y") {
+		t.Fatalf("exit hint missing quit/Ctrl+C/Ctrl+Y:\n%s", out)
 	}
 }

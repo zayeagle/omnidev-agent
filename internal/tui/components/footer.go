@@ -11,7 +11,7 @@ var (
 	footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
 )
 
-const footerExitHint = "Exit: type quit or exit · Ctrl+C"
+const footerExitHint = "Exit: quit or exit · Ctrl+C · Ctrl+Y toggle confirm/yolo"
 
 // FooterExitHint renders a persistent hint for leaving the agent.
 func FooterExitHint(width int) string {

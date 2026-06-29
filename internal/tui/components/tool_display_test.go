@@ -41,7 +41,7 @@ func TestSummarizeToolResult_GoTestFail(t *testing.T) {
 }
 
 func TestSummarizeToolResult_WriteKeepsShort(t *testing.T) {
-	msg := "wrote 259 bytes to main.go"
+	msg := "updated main.go (+45 -0)"
 	got := SummarizeToolResult("write_file", true, msg, "")
 	if got != msg {
 		t.Fatalf("unexpected: %q", got)

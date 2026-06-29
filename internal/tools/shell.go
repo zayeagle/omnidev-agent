@@ -18,7 +18,8 @@ type shellExecTool struct{}
 
 func (t *shellExecTool) Name() string { return "shell_exec" }
 func (t *shellExecTool) Description() string {
-	return "Execute a shell command with a 30-second timeout. Uses cmd /C on Windows and sh -c on Linux/macOS (any CPU arch)."
+	return "Execute a shell command with a 30-second timeout. Uses cmd /C on Windows and sh -c on Linux/macOS. " +
+		"For Go verification use `go build ./...` and `go test ./...` only — never `go run`, dev servers, or other long-lived processes (they are blocked)."
 }
 func (t *shellExecTool) Level() permissions.Level { return permissions.LevelDangerous }
 func (t *shellExecTool) Parameters() map[string]interface{} {
@@ -40,6 +41,10 @@ func (t *shellExecTool) Execute(ctx context.Context, args map[string]interface{}
 		return ErrResult("cmd is required")
 	}
 	workdir := getStringArg(args, "workdir", "")
+
+	if reason := LongRunningShellReason(cmdStr); reason != "" {
+		return ErrResult(reason)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -67,5 +72,5 @@ func (t *shellExecTool) Execute(ctx context.Context, args map[string]interface{}
 		}
 		return ErrResult("exit code: " + err.Error() + "\n" + output)
 	}
-	return OkResult(output)
+	return okLimited("shell_exec", output)
 }

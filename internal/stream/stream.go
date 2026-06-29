@@ -10,14 +10,44 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 )
 
+// RetryConfig controls LLM API retry with exponential backoff.
+type RetryConfig struct {
+	MaxRetries int               // retries after the first attempt (default 3)
+	Backoffs   []time.Duration   // wait before each retry (default 1s, 2s, 4s)
+}
+
+// DefaultRetryConfig returns built-in LLM retry defaults.
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries: 3,
+		Backoffs:   []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second},
+	}
+}
+
+func (rc RetryConfig) normalized() RetryConfig {
+	out := rc
+	if out.MaxRetries < 0 {
+		out.MaxRetries = DefaultRetryConfig().MaxRetries
+	}
+	if len(out.Backoffs) == 0 {
+		out.Backoffs = DefaultRetryConfig().Backoffs
+	}
+	return out
+}
+
+func backoffAt(backoffs []time.Duration, attempt int) time.Duration {
+	if attempt < len(backoffs) {
+		return backoffs[attempt]
+	}
+	return backoffs[len(backoffs)-1]
+}
+
 // RetryChat calls provider.Chat with exponential backoff retry.
-// Max 3 retries: 1s, 2s, 4s.
-func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request) (*llm.Response, error) {
-	const maxRetries = 3
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request, cfg RetryConfig) (*llm.Response, error) {
+	cfg = cfg.normalized()
 
 	var lastErr error
-	for i := 0; i <= maxRetries; i++ {
+	for i := 0; i <= cfg.MaxRetries; i++ {
 		resp, err := provider.Chat(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -33,15 +63,16 @@ func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request) (*l
 			return nil, err
 		}
 
-		if i < maxRetries {
+		if i < cfg.MaxRetries {
 			select {
-			case <-time.After(backoffs[i]):
+			case <-time.After(backoffAt(cfg.Backoffs, i)):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
 	}
-	return nil, fmt.Errorf("llm: failed after %d retries: %w", maxRetries+1, lastErr)
+	attempts := cfg.MaxRetries + 1
+	return nil, fmt.Errorf("llm: failed after %d attempts: %w", attempts, lastErr)
 }
 
 func isNonRetryableLLMError(err error) bool {

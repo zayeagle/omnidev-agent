@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -112,8 +113,16 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 		}
 	}
 
-	// 4. LLM Decomposition — DDD projects only; minimal scope runs the main agent loop directly.
-	if a.dispatcher != nil && a.projectLayout == LayoutDDD {
+	// 4. Requirements analysis (optional LLM — off by default to save tokens)
+	if a.pipelineOpts.UseLLMRequirements {
+		if analysis := a.analyzeRequirements(ctx, instruction); analysis != "" {
+			msgCh <- StreamChunkMsg{Content: analysis, Done: true}
+			a.session.AddWithState("system", analysis, StateThinking.String(), 0)
+		}
+	}
+
+	// 5. LLM Decomposition + parallel dispatch (all code_mod paths)
+	if a.dispatcher != nil {
 		handled, err := a.dispatcher.Dispatch(ctx, instruction, msgCh)
 		if err != nil {
 			msgCh <- StreamChunkMsg{
@@ -126,36 +135,40 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 			msgCh <- AgentStateMsg{State: StateDone}
 			msgCh <- DoneMsg{}
 			if a.store != nil {
-				a.store.Save(a.session)
-				a.store.Export(a.session)
+				a.store.SaveActive(a.session)
 			}
 			return nil
 		}
 	}
 
-	// 5. Main agent loop (minimal/default path, or fallback after DDD dispatch failure)
-	if a.projectLayout != LayoutDDD {
-		msgCh <- TaskPlanMsg{Tasks: []TaskPlanItem{{ID: "1", Description: instruction}}}
-	}
+	// 6. Fallback: main agent loop
 	if err := a.standardLoop(ctx, msgCh, true); err != nil {
 		return err
 	}
 	return nil
 }
 
-// classifyIntent runs an inexpensive LLM call to determine whether the user
-// wants a conversation or code changes. Falls back to IntentCodeMod on error.
+// classifyIntent uses strict chat heuristics first; optional LLM when configured.
 func (a *Agent) classifyIntent(ctx context.Context, instruction string, msgCh chan<- tea.Msg) IntentClass {
-	if a.classifier != nil {
+	// Follow-ups after code work always enter the task pipeline (unless pure greeting).
+	if a.hasPriorCodeActivity() && !isPureGreeting(instruction) {
+		return IntentCodeMod
+	}
+	if looksLikeCodeMod(instruction) {
+		return IntentCodeMod
+	}
+	if looksLikeSimpleChat(instruction) {
+		return IntentChat
+	}
+	if a.classifier != nil && a.pipelineOpts.UseLLMClassifier {
 		return a.classifier.Classify(ctx, instruction)
 	}
-	// No classifier configured: safe default — run full pipeline
 	return IntentCodeMod
 }
 
 // assessProjectLayout decides minimal vs DDD structure for a new workspace.
 func (a *Agent) assessProjectLayout(ctx context.Context, instruction string) ProjectLayout {
-	if a.complexityClassifier != nil {
+	if a.complexityClassifier != nil && a.pipelineOpts.UseLLMComplexity {
 		return a.complexityClassifier.Classify(ctx, instruction)
 	}
 	return layoutFromHeuristic(instruction)
@@ -194,7 +207,25 @@ func (a *Agent) finalizeNewProjectWorkspace(ctx context.Context, projDir, instru
 // and as a fallback when decomposition fails.
 // includeTools=false for conversation-only turns (some gateways reject tool schemas).
 func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTools bool) error {
+	if err := a.agentLoop(ctx, msgCh, includeTools); err != nil {
+		return err
+	}
+	if !a.subAgent && a.state != StateError {
+		a.finishParentTask(ctx, msgCh, includeTools, 1)
+	}
+	if a.store != nil {
+		if err := a.store.SaveActive(a.session); err != nil {
+			msgCh <- ErrorMsg{Error: "session save failed: " + err.Error()}
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTools bool) error {
 	consecutiveRejects := 0
+	reviewNudges := 0
+	instruction := latestUserInstruction(a.session)
 
 	for turn := 0; turn < a.maxTurns; turn++ {
 		select {
@@ -217,7 +248,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 
 		resp, err := stream.ChatWithRetry(ctx, a.provider, req, func(part string) {
 			msgCh <- StreamChunkMsg{Content: part, Done: false}
-		})
+		}, a.retryConfig)
 		if err != nil {
 			a.setState(StateError)
 			errContent := "LLM error: " + err.Error()
@@ -247,8 +278,14 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 			a.session.AddWithState("assistant", assistantContent, StateThinking.String(), 0)
 		}
 
-		// No tool calls → agent is finished
+		// No tool calls → agent is finished (unless review exploration is incomplete)
 		if len(toolCalls) == 0 {
+			if reviewNudges < 2 && needsMoreReview(instruction, a.session) {
+				reviewNudges++
+				a.session.AddWithState("system", reviewNudgeText, StateThinking.String(), 0)
+				msgCh <- StreamChunkMsg{Content: "Review incomplete — exploring more of the codebase…", Done: true}
+				continue
+			}
 			break
 		}
 
@@ -386,6 +423,9 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 					}
 					if !userResp.Granted {
 						rejection := "user denied " + tc.Name
+						if userResp.Reason != "" {
+							rejection += ": " + userResp.Reason
+						}
 						a.session.Add(session.Entry{
 							Timestamp: time.Now(),
 							Role:      "tool",
@@ -396,6 +436,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 								Name:      tc.Name,
 								Arguments: tc.Arguments,
 								Allowed:   false,
+								Error:     rejection,
 							}},
 						})
 						msgCh <- ToolResultMsg{Success: false, Error: rejection}
@@ -412,10 +453,6 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 
 			// Execute the tool
 			result := tool.Execute(ctx, tc.Arguments)
-			toolContent := result.Data
-			if !result.Success {
-				toolContent = result.Error
-			}
 
 			tcEntry := session.ToolCallEntry{
 				ID:        tc.ID,
@@ -432,7 +469,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 			a.session.Add(session.Entry{
 				Timestamp: time.Now(),
 				Role:      "tool",
-				Content:   toolContent,
+				Content:   toolSummaryLine(tc.Name, result.Success),
 				State:     StateExecuting.String(),
 				ToolCalls: []session.ToolCallEntry{tcEntry},
 			})
@@ -451,7 +488,7 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 		} else {
 			consecutiveRejects = 0
 		}
-		if consecutiveRejects >= 3 {
+		if a.maxConsecutiveDenials > 0 && consecutiveRejects >= a.maxConsecutiveDenials {
 			errMsg := fmt.Sprintf("Aborting: %d consecutive turns with denied operations. Please review your request.", consecutiveRejects)
 			a.session.AddWithState("system", errMsg, StateError.String(), 0)
 			msgCh <- ErrorMsg{Error: errMsg}
@@ -459,28 +496,6 @@ func (a *Agent) standardLoop(ctx context.Context, msgCh chan<- tea.Msg, includeT
 		}
 	}
 
-	// Done — only the parent agent loop signals completion to the TUI.
-	// Pure conversation (includeTools=false) has no task banner.
-	if !a.subAgent && a.state != StateError {
-		if a.outputDir != "" {
-			msgCh <- NewAllComplete(1, a.outputDir)
-		} else if includeTools {
-			msgCh <- AllCompleteMsg{Summary: "Task completed."}
-		}
-		a.setState(StateDone)
-		msgCh <- AgentStateMsg{State: StateDone}
-		msgCh <- DoneMsg{}
-	}
-
-	if a.store != nil {
-		if err := a.store.Save(a.session); err != nil {
-			msgCh <- ErrorMsg{Error: "session save failed: " + err.Error()}
-			return err
-		}
-		if err := a.store.Export(a.session); err != nil {
-			msgCh <- ErrorMsg{Error: "session export failed: " + err.Error()}
-		}
-	}
 	return nil
 }
 
@@ -577,4 +592,42 @@ func buildConfirmPreview(name string, args map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+// finishParentTask runs verify-fix until pass, then signals completion to the TUI.
+func (a *Agent) finishParentTask(ctx context.Context, msgCh chan<- tea.Msg, includeTools bool, taskCount int) {
+	projectDir := a.outputDir
+	if projectDir != "" {
+		if abs, err := filepath.Abs(projectDir); err == nil {
+			projectDir = abs
+		}
+	}
+
+	verifyOK := true
+	if includeTools && projectDir != "" {
+		verifyOK = a.runVerifyFixUntilPass(ctx, msgCh, projectDir)
+	}
+
+	if !verifyOK {
+		a.setState(StateError)
+		msgCh <- StreamChunkMsg{Content: "Stopped: build/test verification did not pass after retries.", Done: true}
+		msgCh <- ErrorMsg{Error: "verification failed"}
+		msgCh <- AgentStateMsg{State: StateError}
+		msgCh <- DoneMsg{}
+		return
+	}
+
+	a.signalTaskComplete(ctx, msgCh, includeTools, taskCount, projectDir, nil)
+}
+
+func (a *Agent) signalTaskComplete(ctx context.Context, msgCh chan<- tea.Msg, includeTools bool, taskCount int, projectDir string, results []TaskResult) {
+	conclusion := a.BuildFinalConclusion(ctx, results)
+	if projectDir != "" {
+		msgCh <- NewAllComplete(conclusion, projectDir)
+	} else if includeTools {
+		msgCh <- AllCompleteMsg{Summary: conclusion}
+	}
+	a.setState(StateDone)
+	msgCh <- AgentStateMsg{State: StateDone}
+	msgCh <- DoneMsg{}
 }

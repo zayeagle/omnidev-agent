@@ -13,8 +13,10 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/agent"
 	"github.com/zayeagle/omnidev-agent/internal/config"
 	"github.com/zayeagle/omnidev-agent/internal/llm"
+	"github.com/zayeagle/omnidev-agent/internal/mcp"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/session"
+	"github.com/zayeagle/omnidev-agent/internal/skills"
 	"github.com/zayeagle/omnidev-agent/internal/tools"
 	verpkg "github.com/zayeagle/omnidev-agent/internal/version"
 )
@@ -34,7 +36,7 @@ func main() {
 
 	cfg, err := config.LoadWithLayers(config.LoadOptions{
 		ProjectConfigPath: ".omnidev-agent.json",
-		GlobalConfigPath:  os.ExpandEnv("$HOME/.omnidev-agent/config.json"),
+		GlobalConfigPath:  config.DefaultGlobalConfigPath(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
@@ -55,34 +57,68 @@ func main() {
 	permChecker := permissions.NewForRun(flags.prompt != "", flags.yolo)
 	toolbox := tools.NewRegistry()
 	tools.RegisterAll(toolbox)
+	tools.SetResultLimits(cfg.ToolResultLimits())
+
+	skillCat := skills.LoadCatalog(cfg.SkillsSearchDirs())
+	tools.SetSkillCatalog(skillCat)
+	tools.RegisterSkills(toolbox)
+
+	mcpMgr, err := mcp.Start(context.Background(), cfg.MCPServerConfigs())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
+	}
+	if mcpMgr != nil {
+		mcpMgr.RegisterTools(toolbox, cfg.MCPServerConfigs())
+		defer mcpMgr.Close()
+	}
 
 	sess := session.New()
 	sessionStore := session.NewStore(cfg.RuntimeSessionDir())
+	if loaded, err := sessionStore.LoadActive(); err != nil {
+		fmt.Fprintf(os.Stderr, "session load: %v\n", err)
+	} else if loaded != nil && loaded.Count() > 0 {
+		sess = loaded
+	}
 
 	cpStore := agent.NewCheckpointStore(".ai_history/checkpoints/")
 
 	a := agent.New(provider, permChecker, toolbox, sess)
 	a.SetMaxTurns(cfg.MaxTurns)
+	retryCfg := cfg.LLMRetryConfig()
+	a.SetRetryConfig(retryCfg)
+	a.SetMaxConsecutiveDenials(cfg.EffectiveMaxConsecutiveToolDenials())
+	a.SetPipelineOptions(cfg.PipelineOptions())
+	a.SetContextSlimOptions(cfg.ContextSlimOptions())
+	a.SetSkillCatalog(skillCat)
+	if mcpMgr != nil {
+		a.SetMCPManager(mcpMgr)
+	}
 	a.SetStore(sessionStore)
 	a.SetCheckpointStore(cpStore)
 	if cfg.ContextMaxTokens > 0 {
-		a.SetContextManager(agent.NewContextManager(provider, cfg.ContextMaxTokens, cfg.ContextSummarizeThreshold, ""))
+		cm := agent.NewContextManager(provider, cfg.EffectiveContextMaxTokens(), cfg.EffectiveContextSummarizeThreshold(), "")
+		cm.SetRetryConfig(retryCfg)
+		a.SetContextManager(cm)
 	}
 
 	cwd, _ := os.Getwd()
 	guard := agent.NewProjectAwarenessGuard(toolbox, sess, cwd)
+	guard.SetAnalysisMaxChars(cfg.ContextSlimOptions().GuardAnalysisMax)
 	a.SetGuard(guard)
 
 	classifier := agent.NewClassifier(provider)
+	classifier.SetRetryConfig(retryCfg)
 	a.SetClassifier(classifier)
 
 	complexityClassifier := agent.NewComplexityClassifier(provider)
+	complexityClassifier.SetRetryConfig(retryCfg)
 	a.SetComplexityClassifier(complexityClassifier)
 
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
-		MaxParallel:      cfg.MaxParallel,
-		SubAgentTimeout:  time.Duration(cfg.SubAgentTimeout) * time.Second,
-		SubAgentMaxTurns: cfg.SubAgentMaxTurns,
+		MaxParallel:        cfg.MaxParallel,
+		SubAgentTimeout:      time.Duration(cfg.SubAgentTimeout) * time.Second,
+		SubAgentMaxTurns:     cfg.SubAgentMaxTurns,
+		SubAgentMaxRetries:   cfg.SubAgentMaxRetries,
 	})
 	dispatcher.SetCheckpointStore(cpStore)
 	a.SetDispatcher(dispatcher)
@@ -92,9 +128,8 @@ func main() {
 	go func() {
 		<-sigCh
 		fmt.Fprintf(os.Stderr, "\nSaving session...\n")
-		sessionStore.Save(sess)
-		sessionStore.Export(sess)
-		fmt.Fprintf(os.Stderr, "Interrupted. Checkpoint preserved.\n")
+		_ = sessionStore.SaveActive(a.Session())
+		fmt.Fprintf(os.Stderr, "Interrupted. Session preserved.\n")
 		os.Exit(0)
 	}()
 
@@ -117,5 +152,5 @@ func main() {
 	}
 
 	// ── TUI mode (default) ──
-	runTUI(a, cfg, guard)
+	runTUI(a, cfg, guard, sessionStore)
 }

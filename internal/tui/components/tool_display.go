@@ -45,7 +45,7 @@ func SummarizeToolResult(toolName string, success bool, data, errMsg string) str
 	case "shell_exec":
 		return summarizeShellOutput(data)
 	case "write_file", "edit_file", "delete_file":
-		return truncateDisplay(data, 160)
+		return summarizeFileChange(data)
 	default:
 		return truncateDisplay(data, 120)
 	}
@@ -133,6 +133,14 @@ func summarizeGoTestOutput(combined string) string {
 		return "all tests passed"
 	}
 	return ""
+}
+
+func summarizeFileChange(data string) string {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return "file changed"
+	}
+	return truncateDisplay(data, 160)
 }
 
 func truncateDisplay(s string, max int) string {

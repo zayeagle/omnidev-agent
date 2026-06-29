@@ -10,4 +10,12 @@ func RegisterAll(r *Registry) {
 	r.Register(&editFileTool{})
 	r.Register(&shellExecTool{})
 	r.Register(&deleteFileTool{})
+	r.Register(&gitStatusTool{})
+	r.Register(&gitDiffStatTool{})
+}
+
+// RegisterSkills adds list_skills / load_skill (requires SetSkillCatalog).
+func RegisterSkills(r *Registry) {
+	r.Register(&listSkillsTool{})
+	r.Register(&loadSkillTool{})
 }

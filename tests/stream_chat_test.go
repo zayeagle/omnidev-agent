@@ -19,7 +19,7 @@ func TestChatWithRetry_StreamsWithoutTools(t *testing.T) {
 		Messages: []llm.Message{{Role: "user", Content: "hi"}},
 	}, func(s string) {
 		parts = append(parts, s)
-	})
+	}, stream.DefaultRetryConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

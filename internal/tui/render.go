@@ -32,7 +32,7 @@ func (m *model) View() string {
 	if m.turns.Count() > 0 {
 		pinTasks := m.pinTasksTurn()
 		if pinTasks != nil {
-			panel := components.TaskPanelLines(pinTasks, w)
+			panel := components.TaskPanelLines(pinTasks, w, m.pinnedTodoStatus())
 			if len(panel) > 0 {
 				b.WriteString(strings.Join(panel, "\n"))
 				b.WriteString("\n")
@@ -59,14 +59,34 @@ func (m *model) View() string {
 		}
 		dialog := components.CheckpointDialog(w, m.checkpointPhase, m.checkpointDone, m.checkpointTotal)
 		b.WriteString(components.ConfirmOverlay(w, dialog))
+	} else if m.planConfirming {
+		if working {
+			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
+			b.WriteString("\n")
+		}
+		taskCount := 0
+		if t := m.currentTurn(); t != nil {
+			taskCount = len(t.Tasks)
+		}
+		dialog := components.PlanConfirmDialog(w, taskCount)
+		b.WriteString(components.ConfirmOverlay(w, dialog))
 	} else {
 		if working {
 			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
 			b.WriteString("\n")
 		}
-		if cp := components.CompletionPanelLines(m.currentTurn(), w); len(cp) > 0 {
-			b.WriteString(strings.Join(cp, "\n"))
+		if cp := components.CompletionPanelLayout(m.currentTurn(), w); len(cp.Lines) > 0 {
+			baseLines := visualLineCount(b.String())
+			if cp.TasksToggleLine >= 0 {
+				m.tasksToggleAtLine = baseLines + cp.TasksToggleLine
+			} else {
+				m.tasksToggleAtLine = -1
+			}
+			b.WriteString(strings.Join(cp.Lines, "\n"))
+		} else {
+			m.tasksToggleAtLine = -1
 		}
+		b.WriteString("\n")
 		b.WriteString(m.input.View(working, m.turns.Count() > 0, w))
 		b.WriteString("\n")
 		b.WriteString(components.FooterBar(

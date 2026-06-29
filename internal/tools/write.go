@@ -37,13 +37,23 @@ func (t *writeFileTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 	content := getStringArg(args, "content", "")
 
+	var oldContent string
+	if data, err := os.ReadFile(path); err == nil {
+		oldContent = string(data)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return ErrResult(err.Error())
 	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return ErrResult(err.Error())
 	}
-	return OkResult("wrote " + itoa(len(content)) + " bytes to " + path)
+	added, removed := FileLineChange(oldContent, content)
+	verb := "wrote"
+	if oldContent != "" {
+		verb = "updated"
+	}
+	return OkResult(FormatChange(verb, path, added, removed))
 }
 
 // ── edit_file ──
@@ -97,5 +107,6 @@ func (t *editFileTool) Execute(ctx context.Context, args map[string]interface{})
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
 		return ErrResult(err.Error())
 	}
-	return OkResult("edited " + path + ": replaced 1 occurrence")
+	added, removed := SnippetLineChange(oldSnippet, newSnippet)
+	return OkResult(FormatChange("edited", path, added, removed))
 }

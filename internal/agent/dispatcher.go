@@ -48,26 +48,31 @@ type ResolveConflictMsg struct {
 // TaskDispatcher decomposes complex instructions into parallel sub-tasks
 // and orchestrates their execution via SubAgents with checkpoint support.
 type TaskDispatcher struct {
-	agent            *Agent
-	maxParallel      int
-	subAgentTimeout  time.Duration
-	subAgentMaxTurns int
-	checkpointStore  *CheckpointStore
+	agent              *Agent
+	maxParallel        int
+	subAgentTimeout    time.Duration
+	subAgentMaxTurns   int
+	subAgentMaxRetries int
+	checkpointStore    *CheckpointStore
+	skipPlanConfirm    bool
 }
 
 // DispatcherOptions configures parallel sub-agent execution.
 type DispatcherOptions struct {
-	MaxParallel      int
-	SubAgentTimeout  time.Duration
-	SubAgentMaxTurns int
+	MaxParallel        int
+	SubAgentTimeout    time.Duration
+	SubAgentMaxTurns   int
+	SubAgentMaxRetries int
+	SkipPlanConfirm    bool // tests/headless auto-confirm via message handler
 }
 
 // DefaultDispatcherOptions returns built-in defaults when no config is supplied.
 func DefaultDispatcherOptions() DispatcherOptions {
 	return DispatcherOptions{
-		MaxParallel:      2,
-		SubAgentTimeout:  120 * time.Second,
-		SubAgentMaxTurns: 10,
+		MaxParallel:        4,
+		SubAgentTimeout:    120 * time.Second,
+		SubAgentMaxTurns:   10,
+		SubAgentMaxRetries: 0,
 	}
 }
 
@@ -83,10 +88,12 @@ func NewTaskDispatcher(agent *Agent, opts DispatcherOptions) *TaskDispatcher {
 		opts.SubAgentMaxTurns = DefaultDispatcherOptions().SubAgentMaxTurns
 	}
 	return &TaskDispatcher{
-		agent:            agent,
-		maxParallel:      opts.MaxParallel,
-		subAgentTimeout:  opts.SubAgentTimeout,
-		subAgentMaxTurns: opts.SubAgentMaxTurns,
+		agent:              agent,
+		maxParallel:        opts.MaxParallel,
+		subAgentTimeout:    opts.SubAgentTimeout,
+		subAgentMaxTurns:   opts.SubAgentMaxTurns,
+		subAgentMaxRetries: opts.SubAgentMaxRetries,
+		skipPlanConfirm:    opts.SkipPlanConfirm,
 	}
 }
 
@@ -141,13 +148,42 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 
 	msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(tasks)}
 
-	// Single-task plans run on the parent agent (same message shape as direct curl tests).
-	if len(tasks) == 1 {
-		cp.Phase = CheckpointExecuting
-		d.checkpointSave(cp)
-		msgCh <- StreamChunkMsg{Content: "Single task — executing on main agent.", Done: true}
-		if err := d.agent.standardLoop(ctx, msgCh, true); err != nil {
+	if len(tasks) > 1 {
+		confirmed, err := d.waitForPlanConfirm(ctx, msgCh, len(tasks))
+		if err != nil {
 			return false, err
+		}
+		if !confirmed {
+			d.checkpointClear()
+			msgCh <- StreamChunkMsg{Content: "Task plan cancelled.", Done: true}
+			return true, nil
+		}
+	}
+
+	implTasks := implementationTasks(tasks)
+	verifyTask := findVerificationTask(tasks)
+
+	cp.Phase = CheckpointExecuting
+	d.checkpointSave(cp)
+
+	// One implementation task + auto verify: main agent implements, then verify-fix loop.
+	if len(implTasks) == 1 && verifyTask != nil {
+		msgCh <- StreamChunkMsg{Content: "Executing task, then build/test verification.", Done: true}
+		msgCh <- SubtaskMsg{TaskID: implTasks[0].ID, Status: "running", Label: implTasks[0].Description}
+		if err := d.agent.agentLoop(ctx, msgCh, true); err != nil {
+			return false, err
+		}
+		if d.agent.state != StateError {
+			msgCh <- SubtaskMsg{TaskID: implTasks[0].ID, Status: "done", Label: implTasks[0].Description}
+			result := d.runVerificationTask(ctx, *verifyTask, msgCh)
+			projectDir := d.agent.OutputDir()
+			if result.Success {
+				d.agent.signalTaskComplete(ctx, msgCh, true, 1, projectDir, []TaskResult{result})
+			} else {
+				d.agent.setState(StateError)
+				msgCh <- StreamChunkMsg{Content: "Verification failed after retries.", Done: true}
+				msgCh <- ErrorMsg{Error: result.Error}
+			}
 		}
 		d.checkpointClear()
 		return true, nil
@@ -157,14 +193,18 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 	if err != nil {
 		return false, err
 	}
-	d.mergeResults(cp.Results, msgCh)
+	d.mergeResults(ctx, cp.Results, msgCh)
 	d.checkpointClear()
 	return true, nil
 }
 
-// Plan decomposes an instruction into sub-tasks using the LLM.
-// Always runs — simple requests yield a single-task plan.
+// Plan decomposes an instruction into sub-tasks using the LLM (default).
+// Mode 0/1: LLM decides whether to return one task or many. Mode 2: skip LLM, single task.
 func (d *TaskDispatcher) Plan(ctx context.Context, instruction string) ([]Task, error) {
+	if d.agent.pipelineOpts.PlanMode == 2 {
+		return ensureVerificationTask([]Task{{ID: "1", Description: instruction}}), nil
+	}
+
 	layoutHint := ""
 	switch d.agent.ProjectLayout() {
 	case LayoutDDD:
@@ -173,28 +213,33 @@ func (d *TaskDispatcher) Plan(ctx context.Context, instruction string) ([]Task, 
 		layoutHint = "\n- Project is minimal scope; prefer exactly ONE task for small programs (snake game, calculator, CLI). Only split when clearly separable."
 	}
 
-	prompt := fmt.Sprintf(`You are a task planner. Decompose the following development request into independent sub-tasks.
+	prompt := fmt.Sprintf(`You are a task planner. Analyze the request and decide how many sub-tasks are needed.
 
 Rules:
-- Even simple requests should produce at least one task
+- YOU decide: return ONE task when the work is small/cohesive; split into multiple tasks only when clearly separable or parallelizable
+- Simple requests (single bug fix, one file, small feature) → exactly ONE task; put the full user request in description
+- Complex requests (multiple layers, frontend+backend, independent modules) → multiple tasks with depends_on where order matters
 - Write every task description in English
 - Each sub-task must be self-contained (no shared mutable state)
-- Tasks that can run in parallel should NOT list each other as dependencies
-- Tasks that must run after another task should list that task's ID in depends_on
-- Output ONLY valid JSON — an array of objects with id, description, and optional depends_on fields
-- Keep each description concise (one sentence)%s
+- Tasks that can run in parallel must NOT list each other as dependencies
+- Output ONLY valid JSON — an array of objects with id, description, and optional depends_on
+- Keep each description concise (one sentence)
+- Do NOT add a final verification task — one is appended automatically after planning%s
 
 Request: %s
 
-Output format:
+Output format (one task example):
+[{"id": "1", "description": "implement X end-to-end"}]
+
+Multi-task example:
 [{"id": "1", "description": "do X"}, {"id": "2", "description": "do Y", "depends_on": ["1"]}]`, layoutHint, instruction)
 
 	messages := []llm.Message{
-		{Role: "system", Content: "You are a task planner. Output only valid JSON arrays. Write descriptions in English. No markdown, no explanation."},
+		{Role: "system", Content: "You are a task planner. Output only valid JSON arrays. Prefer a single task unless splitting clearly helps. No markdown, no explanation."},
 		{Role: "user", Content: prompt},
 	}
 
-	resp, err := stream.RetryChat(ctx, d.agent.provider, &llm.Request{Messages: messages})
+	resp, err := stream.RetryChat(ctx, d.agent.provider, &llm.Request{Messages: messages}, d.agent.retryConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +253,7 @@ Output format:
 	if len(tasks) == 0 {
 		tasks = []Task{{ID: "1", Description: instruction}}
 	}
-	return tasks, nil
+	return ensureVerificationTask(tasks), nil
 }
 
 // dispatchWithCheckpoint handles resume after a checkpoint is found.
@@ -229,7 +274,7 @@ func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction
 	if err != nil {
 		return false, err
 	}
-	d.mergeResults(cp.Results, msgCh)
+	d.mergeResults(ctx, cp.Results, msgCh)
 	d.checkpointClear()
 	return true, nil
 }
@@ -320,59 +365,76 @@ func (d *TaskDispatcher) executeTasks(ctx context.Context, allTasks []Task, comp
 
 // runSubAgent creates a lightweight sub-agent that executes a single task.
 func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<- tea.Msg) TaskResult {
+	if IsVerificationTask(task) {
+		return d.runVerificationTask(ctx, task, msgCh)
+	}
+
 	msgCh <- SubtaskMsg{TaskID: task.ID, Status: "running", Label: task.Description}
 
-	subSess := session.New()
-	for _, e := range d.agent.session.Entries {
-		if e.Role == "system" && strings.Contains(e.Content, "[PROJECT ANALYSIS]") {
-			subSess.Add(e)
+	maxAttempts := 1 + d.subAgentMaxRetries
+	var lastResult TaskResult
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			label := fmt.Sprintf("retry %d/%d: %s", attempt, d.subAgentMaxRetries, task.Description)
+			msgCh <- SubtaskMsg{TaskID: task.ID, Status: "running", Label: label}
 		}
-	}
-	// User message is added by RunLoop; pre-adding here caused duplicate consecutive
-	// user roles, which strict OpenAI-compatible gateways reject with 400.
 
-	subGuard := NewProjectAwarenessGuard(d.agent.toolbox, subSess, "")
-	subGuard.state = GuardDone
+		subSess := session.New()
+		if hint := ParentContextForSubAgent(d.agent.session.Entries); hint != "" {
+			subSess.AddWithState("system", hint, "parent-context", 0)
+		}
 
-	subAgent := &Agent{
-		state:       StateIdle,
-		provider:    d.agent.provider,
-		permChecker: d.agent.permChecker,
-		toolbox:     d.agent.toolbox,
-		session:     subSess,
-		maxTurns:    d.subAgentMaxTurns,
-		subAgent:    true,
-		guard:       subGuard,
-		ctxMgr:      d.agent.ctxMgr,
-	}
-	if dir := d.agent.OutputDir(); dir != "" {
-		subAgent.SetOutputDir(dir)
-	}
-	subAgent.SetProjectLayout(d.agent.ProjectLayout())
+		subGuard := NewProjectAwarenessGuard(d.agent.toolbox, subSess, "")
+		subGuard.state = GuardDone
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, d.subAgentTimeout)
-	defer cancel()
+		subAgent := &Agent{
+			state:                 StateIdle,
+			provider:              d.agent.provider,
+			permChecker:           d.agent.permChecker,
+			toolbox:               d.agent.toolbox,
+			session:               subSess,
+			maxTurns:              d.subAgentMaxTurns,
+			subAgent:              true,
+			guard:                 subGuard,
+			ctxMgr:                d.agent.ctxMgr,
+			retryConfig:           d.agent.retryConfig,
+			maxConsecutiveDenials: d.agent.maxConsecutiveDenials,
+		}
+		if dir := d.agent.OutputDir(); dir != "" {
+			subAgent.SetOutputDir(dir)
+		}
+		subAgent.SetProjectLayout(d.agent.ProjectLayout())
+		subAgent.SetActiveSubtaskID(task.ID)
 
-	subAgent.SetActiveSubtaskID(task.ID)
-	defer subAgent.SetActiveSubtaskID("")
+		timeoutCtx, cancel := context.WithTimeout(ctx, d.subAgentTimeout)
+		err := subAgent.RunLoop(timeoutCtx, task.Description, msgCh)
+		cancel()
 
-	err := subAgent.RunLoop(timeoutCtx, task.Description, msgCh)
+		result := TaskResult{TaskID: task.ID}
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			lastResult = result
+			if attempt+1 < maxAttempts {
+				msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: fmt.Sprintf("attempt %d failed: %s", attempt+1, err.Error())}
+				continue
+			}
+			msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: err.Error()}
+			return result
+		}
 
-	result := TaskResult{TaskID: task.ID}
-	if err != nil {
-		result.Success = false
-		result.Error = err.Error()
-		msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: err.Error()}
-	} else {
 		result.Content = subAgent.session.LastAssistantContent()
 		result.Success = true
 		msgCh <- SubtaskMsg{TaskID: task.ID, Status: "done", Label: task.Description}
+		return result
 	}
-	return result
+
+	return lastResult
 }
 
 // mergeResults injects sub-task results into the parent session and emits summary.
-func (d *TaskDispatcher) mergeResults(results []TaskResult, msgCh chan<- tea.Msg) {
+func (d *TaskDispatcher) mergeResults(ctx context.Context, results []TaskResult, msgCh chan<- tea.Msg) {
 	var sb strings.Builder
 	sb.WriteString("[SUB-TASK RESULTS]\n")
 	allOK := true
@@ -397,7 +459,8 @@ func (d *TaskDispatcher) mergeResults(results []TaskResult, msgCh chan<- tea.Msg
 		}
 	}
 	if allOK {
-		msgCh <- NewAllComplete(len(results), projectDir)
+		conclusion := d.agent.BuildFinalConclusion(ctx, results)
+		msgCh <- NewAllComplete(conclusion, projectDir)
 	} else {
 		msgCh <- StreamChunkMsg{Content: "Some sub-tasks failed. See details above.", Done: true}
 	}
@@ -433,7 +496,7 @@ func (d *TaskDispatcher) Rollback(ctx context.Context, taskID string, msgCh chan
 	if err != nil {
 		return false, err
 	}
-	d.mergeResults(cp.Results, msgCh)
+	d.mergeResults(ctx, cp.Results, msgCh)
 	if cp.Phase == CheckpointDone {
 		d.checkpointClear()
 	}
@@ -527,6 +590,20 @@ func (d *TaskDispatcher) checkpointLoad() (*Checkpoint, error) {
 func (d *TaskDispatcher) checkpointClear() {
 	if d.checkpointStore != nil {
 		d.checkpointStore.Clear()
+	}
+}
+
+func (d *TaskDispatcher) waitForPlanConfirm(ctx context.Context, msgCh chan<- tea.Msg, taskCount int) (bool, error) {
+	if d.skipPlanConfirm || taskCount <= 1 {
+		return true, nil
+	}
+	reply := make(chan TaskPlanConfirmResponse, 1)
+	msgCh <- TaskPlanConfirmMsg{TaskCount: taskCount, Reply: reply}
+	select {
+	case resp := <-reply:
+		return resp.Confirmed, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
 }
 

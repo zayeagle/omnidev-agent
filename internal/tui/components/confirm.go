@@ -7,67 +7,113 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Confirm colors
 var (
-	confirmBorder     = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#F87171")).Padding(1, 2)
-	confirmTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
-	confirmDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9FAFB"))
-	confirmApproveKey = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34D399"))
-	confirmDenyKey    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
-	confirmOverlayBG  = lipgloss.NewStyle().Background(lipgloss.Color("#000000"))
+	dialogBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#52525B")).
+				Padding(0, 2).
+				Margin(0, 1)
+	dialogTitleWarn  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F59E0B"))
+	dialogTitleInfo  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#60A5FA"))
+	dialogTitlePlan  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4ADE80"))
+	dialogLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A"))
+	dialogValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E4E4E7"))
+	dialogCmdStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
+	dialogHintStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A")).Italic(true)
+	dialogKeyLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
+	dialogKeyApprove = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4ADE80"))
+	dialogKeyDeny    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F87171"))
+	dialogKeyAlt     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#60A5FA"))
+	dialogOverlayBG  = lipgloss.NewStyle().Background(lipgloss.Color("#0C0C0E"))
 )
 
-// ConfirmDialogHeight is the terminal rows reserved while the permission overlay is shown.
-const ConfirmDialogHeight = 8
+// ConfirmDialogHeight is a conservative fallback when overlay height is not measured.
+const ConfirmDialogHeight = 10
+
+func renderDialogKey(key, label string, keyStyle lipgloss.Style) string {
+	return keyStyle.Render("["+key+"]") + dialogKeyLabel.Render(" "+label)
+}
+
+func renderDialogActions(actions ...string) string {
+	return strings.Join(actions, dialogKeyLabel.Render("  "))
+}
+
+func levelStyle(level string) lipgloss.Style {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "dangerous", "danger":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24"))
+	case "safe", "read":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#4ADE80"))
+	default:
+		return dialogValueStyle
+	}
+}
+
+func writeLabelValue(b *strings.Builder, label, value string, valueStyle lipgloss.Style) {
+	b.WriteString(dialogLabelStyle.Render(fmt.Sprintf("%-9s", label)))
+	b.WriteString(valueStyle.Render(value))
+	b.WriteString("\n")
+}
+
+func writeWrappedField(b *strings.Builder, label string, lines []string, lineStyle lipgloss.Style) {
+	if len(lines) == 0 {
+		return
+	}
+	b.WriteString(dialogLabelStyle.Render(fmt.Sprintf("%-9s", label)))
+	b.WriteString(lineStyle.Render(lines[0]))
+	b.WriteString("\n")
+	pad := strings.Repeat(" ", 9)
+	for _, line := range lines[1:] {
+		b.WriteString(pad)
+		b.WriteString(lineStyle.Render(line))
+		b.WriteString("\n")
+	}
+}
 
 // ConfirmDialog renders a permission approval overlay, centered for the given width.
 func ConfirmDialog(width int, level, description, preview string, remainingSec int) string {
 	if width < 40 {
 		width = 40
 	}
-	innerW := width - 8
+	innerW := width - 10
 	if innerW < 28 {
 		innerW = 28
 	}
 
-	var content strings.Builder
-
-	title := confirmTitleStyle.Render("⚠ Permission Required")
-	content.WriteString(title + "\n\n")
-
-	content.WriteString(confirmDescStyle.Render(fmt.Sprintf("  Level:   %s", level)) + "\n")
-	descLines := WrapDisplayWidth(description, innerW-2)
-	for i, line := range descLines {
-		prefix := "  Command: "
-		if i > 0 {
-			prefix = "           "
-		}
-		content.WriteString(confirmDescStyle.Render(prefix+line) + "\n")
+	tool, detail := SplitToolDescription(description)
+	if tool == "" {
+		tool = "command"
 	}
+
+	var content strings.Builder
+	content.WriteString(dialogTitleWarn.Render("Approval required"))
+	content.WriteString("\n\n")
+
+	writeLabelValue(&content, "Level", level, levelStyle(level))
+	writeLabelValue(&content, "Tool", tool, dialogValueStyle)
+
+	cmdLines := wrapCommandLines(detail, innerW-9, 4)
+	writeWrappedField(&content, "Command", cmdLines, dialogCmdStyle)
+
 	if strings.TrimSpace(preview) != "" {
 		content.WriteString("\n")
-		content.WriteString(confirmDescStyle.Render("  Preview:") + "\n")
-		for _, line := range strings.Split(preview, "\n") {
-			for _, wl := range WrapDisplayWidth(line, innerW-4) {
-				content.WriteString(confirmDescStyle.Render("    "+wl) + "\n")
-			}
-		}
+		prevLines := wrapCommandLines(preview, innerW-9, 6)
+		writeWrappedField(&content, "Preview", prevLines, dialogCmdStyle)
 	}
-	content.WriteString("\n")
 
-	content.WriteString("  ")
-	content.WriteString(confirmApproveKey.Render("[Y] Approve"))
-	content.WriteString(confirmDescStyle.Render("   "))
-	content.WriteString(confirmDenyKey.Render("[N] Deny"))
-	content.WriteString(confirmDescStyle.Render("   "))
-	content.WriteString(confirmApproveKey.Render("[A] Allow all"))
+	content.WriteString("\n")
+	content.WriteString(renderDialogActions(
+		renderDialogKey("Y", "Approve", dialogKeyApprove),
+		renderDialogKey("N", "Deny", dialogKeyDeny),
+		renderDialogKey("A", "Allow all", dialogKeyAlt),
+	))
 	content.WriteString("\n")
 
 	if remainingSec > 0 {
-		content.WriteString(confirmDescStyle.Render(fmt.Sprintf("  (auto-deny in %ds)", remainingSec)))
+		content.WriteString(dialogHintStyle.Render(fmt.Sprintf("auto-deny in %ds", remainingSec)))
 	}
 
-	dialog := confirmBorder.Render(content.String())
+	dialog := dialogBorderStyle.Render(content.String())
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
 }
 
@@ -76,20 +122,37 @@ func CheckpointDialog(width int, phase string, completed, total int) string {
 	if width < 40 {
 		width = 40
 	}
-	innerW := width - 8
-	if innerW < 28 {
-		innerW = 28
+	var content strings.Builder
+	content.WriteString(dialogTitleInfo.Render("Checkpoint found"))
+	content.WriteString("\n\n")
+	writeLabelValue(&content, "Phase", phase, dialogValueStyle)
+	writeLabelValue(&content, "Progress", fmt.Sprintf("%d/%d tasks done", completed, total), dialogValueStyle)
+	content.WriteString("\n")
+	content.WriteString(renderDialogActions(
+		renderDialogKey("Y", "Resume", dialogKeyApprove),
+		renderDialogKey("N", "Start fresh", dialogKeyDeny),
+	))
+	content.WriteString("\n")
+	dialog := dialogBorderStyle.Render(content.String())
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
+}
+
+// PlanConfirmDialog renders approve/cancel prompt for a decomposed task plan.
+func PlanConfirmDialog(width int, taskCount int) string {
+	if width < 40 {
+		width = 40
 	}
 	var content strings.Builder
-	content.WriteString(confirmTitleStyle.Render("⏸ Checkpoint Found") + "\n\n")
-	msg := fmt.Sprintf("  Phase: %s — %d/%d tasks done", phase, completed, total)
-	content.WriteString(confirmDescStyle.Render(msg) + "\n\n")
-	content.WriteString("  ")
-	content.WriteString(confirmApproveKey.Render("[Y] Resume"))
-	content.WriteString(confirmDescStyle.Render("   "))
-	content.WriteString(confirmDenyKey.Render("[N] Start fresh"))
+	content.WriteString(dialogTitlePlan.Render("Task plan ready"))
+	content.WriteString("\n\n")
+	writeLabelValue(&content, "Tasks", fmt.Sprintf("%d sub-tasks — review the list above", taskCount), dialogValueStyle)
 	content.WriteString("\n")
-	dialog := confirmBorder.Render(content.String())
+	content.WriteString(renderDialogActions(
+		renderDialogKey("Enter", "Execute", dialogKeyApprove),
+		renderDialogKey("Esc", "Cancel", dialogKeyDeny),
+	))
+	content.WriteString("\n")
+	dialog := dialogBorderStyle.Render(content.String())
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, dialog)
 }
 
@@ -106,7 +169,7 @@ func ConfirmOverlay(width int, dialog string) string {
 		if pad < 0 {
 			pad = 0
 		}
-		out = append(out, confirmOverlayBG.Render(line+strings.Repeat(" ", pad)))
+		out = append(out, dialogOverlayBG.Render(line+strings.Repeat(" ", pad)))
 	}
 	return strings.Join(out, "\n")
 }

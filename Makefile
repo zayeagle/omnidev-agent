@@ -13,12 +13,19 @@ GO_LDFLAGS = -ldflags "-X main.appVersion=$(VERSION) -X 'main.buildTime=$$(date 
 PREFIX         ?= $(HOME)/.local
 INSTALL_BIN_DIR := $(PREFIX)/bin
 
+# Global config (install once, use from any directory)
+GLOBAL_CONFIG_DIR  := $(HOME)/.omnidev-agent
+GLOBAL_CONFIG      := $(GLOBAL_CONFIG_DIR)/config.json
+PROJECT_CONFIG     := $(CURDIR)/.omnidev-agent.json
+BUILD_BINARY       := $(CURDIR)/$(BIN_DIR)/omnidev-agent
+INSTALL_BINARY     := $(INSTALL_BIN_DIR)/omnidev-agent
+
 # ── Cross-compile matrix ───────────────────────────────────────────────────
 GOOSES   := linux darwin windows
 GOARCHES := amd64 arm64
 EXT_windows := .exe
 
-.PHONY: all build rebuild run test vet clean install install-binary uninstall deploy help config
+.PHONY: all build rebuild run test vet clean install install-binary uninstall deploy help config config-local
 .PHONY: build-all fmt lint bump-patch bump-minor bump-major publish
 .PHONY: $(foreach os,$(GOOSES),$(foreach arch,$(GOARCHES),build-$(os)-$(arch)))
 
@@ -116,31 +123,59 @@ install: build install-binary
 uninstall:
 	@rm -f $(INSTALL_BIN_DIR)/omnidev-agent
 	@echo "✔ Removed $(INSTALL_BIN_DIR)/omnidev-agent"
-	@if [ -f .omnidev-agent.json ]; then \
-		rm -f .omnidev-agent.json; \
-		echo "✔ Removed .omnidev-agent.json"; \
-	fi
-	@if [ -d $(HOME)/.config/omnidev-agent ]; then \
-		echo "  ⚠  Global config still at ~/.config/omnidev-agent/"; \
-		echo "     Run: rm -rf ~/.config/omnidev-agent  to fully remove"; \
+	@if [ -f $(GLOBAL_CONFIG) ]; then \
+		echo "  ⚠  Global config kept at $(GLOBAL_CONFIG)"; \
+		echo "     Run: rm -f $(GLOBAL_CONFIG)  to remove"; \
 	fi
 
 # ── Config ─────────────────────────────────────────────────────────────────
+# Global config for deploy / install-once-use-everywhere (any cwd).
 config:
+	@install -d $(GLOBAL_CONFIG_DIR)
+	@if [ -f $(GLOBAL_CONFIG) ]; then \
+		echo "⚠  $(GLOBAL_CONFIG) already exists (skipped)"; \
+	else \
+		cp .omnidev-agent.json.sample $(GLOBAL_CONFIG); \
+		chmod 600 $(GLOBAL_CONFIG); \
+		echo "✔ Created $(GLOBAL_CONFIG) from sample"; \
+	fi
+	@echo "  ✎ Edit $(GLOBAL_CONFIG) to set your API key and provider."
+
+# Optional per-project override (higher priority than global when cwd has this file).
+config-local:
 	@if [ -f .omnidev-agent.json ]; then \
 		echo "⚠  .omnidev-agent.json already exists (skipped)"; \
 	else \
 		cp .omnidev-agent.json.sample .omnidev-agent.json; \
 		echo "✔ Created .omnidev-agent.json from sample"; \
 	fi
-	@echo "  ✎ Edit .omnidev-agent.json to set your API key and provider."
+	@echo "  ✎ Edit .omnidev-agent.json (optional project override)."
 
 # ── Deploy ─────────────────────────────────────────────────────────────────
-deploy: rebuild install-binary config
+deploy: rebuild install-binary config config-local
 	@echo ""
-	@echo "── Deployment complete ──"
-	@echo "  Binary:   $(INSTALL_BIN_DIR)/omnidev-agent"
-	@echo "  Config:   ./.omnidev-agent.json"
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Deployment complete"
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  [Binary]"
+	@echo "    Build artifact:   $(BUILD_BINARY)"
+	@echo "    Installed binary: $(INSTALL_BINARY)"
+	@echo ""
+	@echo "  [Configuration]"
+	@echo "    Global config:  $(GLOBAL_CONFIG)"
+	@echo "    Project config: $(PROJECT_CONFIG)"
+	@echo ""
+	@echo "  [Config priority — higher wins]"
+	@echo "    1. CLI flags / environment variables (e.g. OMNIDEV_API_KEY)"
+	@echo "    2. Project config: $(PROJECT_CONFIG)"
+	@echo "       (only when current working directory is the project root)"
+	@echo "    3. Global config:  $(GLOBAL_CONFIG)"
+	@echo "       (used from any directory when project file is absent or not loaded)"
+	@echo "    4. Built-in defaults"
+	@echo ""
+	@echo "  Tip: edit global config for install-once-use-everywhere."
+	@echo "       edit project config only when this project needs different settings."
 	@echo ""
 	@if echo "$$PATH" | tr ':' '\n' | grep -qFx "$(INSTALL_BIN_DIR)"; then \
 		echo "  ✔ $(INSTALL_BIN_DIR) is in PATH"; \
@@ -167,7 +202,9 @@ help:
 	@echo "  make clean                  清理 bin/"
 	@echo "  make install                编译并安装到 $(INSTALL_BIN_DIR)"
 	@echo "  make uninstall              卸载 + 清理配置"
-	@echo "  make deploy                 强制全量重编译 + 安装 + config"
+	@echo "  make config                 初始化全局配置 (~/.omnidev-agent/config.json)"
+	@echo "  make config-local           初始化项目配置 (./.omnidev-agent.json，可选)"
+	@echo "  make deploy                 强制全量重编译 + 安装 + 全局/项目 config"
 	@echo "  make rebuild                强制全量重编译 (go build -a)"
 	@echo "  make bump-patch             0.0.0 -> 0.0.1 (VERSION file)"
 	@echo "  make publish                bump-patch + commit VERSION + push"

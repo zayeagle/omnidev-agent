@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 	"github.com/zayeagle/omnidev-agent/internal/session"
@@ -15,38 +14,62 @@ import (
 // When estimated tokens exceed ContextMaxTokens * ContextSummarizeThreshold,
 // older turns are compressed into a single "early context" summary via the LLM.
 type ContextManager struct {
-	maxTokens   int     // 120000 default
-	threshold   float64 // 0.95 default
-	provider    llm.Provider
+	maxTokens    int     // 120000 default
+	threshold    float64 // 0.95 default
+	provider     llm.Provider
 	systemPrompt string
+	retryConfig  stream.RetryConfig
 }
 
 // NewContextManager creates a context manager with the given thresholds.
 func NewContextManager(provider llm.Provider, maxTokens int, threshold float64, systemPrompt string) *ContextManager {
+	if maxTokens <= 0 {
+		maxTokens = 120_000
+	}
+	if threshold <= 0 || threshold > 1 {
+		threshold = 0.95
+	}
 	return &ContextManager{
 		maxTokens:    maxTokens,
 		threshold:    threshold,
 		provider:     provider,
 		systemPrompt: systemPrompt,
+		retryConfig:  stream.DefaultRetryConfig(),
 	}
 }
 
-// EstimateTokens provides a rough token count (≈ chars/4 for English, chars/1.5 for CJK-heavy).
-// This is a fast heuristic, not a model-aware tokenizer. Accuracy ~±20%.
+func (cm *ContextManager) SetRetryConfig(cfg stream.RetryConfig) { cm.retryConfig = cfg }
+
+// EstimateTokens provides a rough token count (≈ chars/3 blended).
 func (cm *ContextManager) EstimateTokens(entries []session.Entry) int {
 	total := 0
 	for _, e := range entries {
-		n := utf8.RuneCountInString(e.Content)
-		// Simple heuristic: 4 chars ≈ 1 token for English, 1.5 chars ≈ 1 token for CJK
-		// Blend at 3 chars/token as reasonable middle ground
-		total += n/3 + 1
-		for _, tc := range e.ToolCalls {
-			n2 := utf8.RuneCountInString(tc.Result + tc.Error)
-			total += n2/3 + 1
-		}
+		total += estimateEntryTokens(e)
 	}
 	return total
 }
+
+// UsagePercent returns estimated context fill as 0–100 (same estimator as ShouldSummarize).
+func (cm *ContextManager) UsagePercent(entries []session.Entry) float64 {
+	if cm.maxTokens <= 0 {
+		return 0
+	}
+	estimated := cm.EstimateTokens(entries)
+	pct := float64(estimated) / float64(cm.maxTokens) * 100
+	if pct > 99.9 {
+		return 99.9
+	}
+	if pct < 0.1 && estimated > 0 {
+		return 0.1
+	}
+	return pct
+}
+
+// MaxTokens returns the configured context window cap.
+func (cm *ContextManager) MaxTokens() int { return cm.maxTokens }
+
+// SummarizeThreshold returns the fraction (e.g. 0.95) at which compaction triggers.
+func (cm *ContextManager) SummarizeThreshold() float64 { return cm.threshold }
 
 // ShouldSummarize returns true when the estimated token count exceeds the
 // threshold percentage of the max context window.
@@ -75,14 +98,7 @@ func (cm *ContextManager) SummarizeEarlyEntries(entries []session.Entry, keepLas
 	sb.WriteString("--- BEGIN HISTORY ---\n\n")
 
 	for _, e := range entries[:len(entries)-keepLast] {
-		sb.WriteString(fmt.Sprintf("[%s] %s\n", strings.ToUpper(e.Role), e.Content))
-		for _, tc := range e.ToolCalls {
-			if tc.Error != "" {
-				sb.WriteString(fmt.Sprintf("  [tool:%s] ERROR: %s\n", tc.Name, tc.Error))
-			} else {
-				sb.WriteString(fmt.Sprintf("  [tool:%s] %s\n", tc.Name, tc.Result))
-			}
-		}
+		sb.WriteString(fmt.Sprintf("[%s] %s\n", strings.ToUpper(e.Role), slimEntryForSummary(e)))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("--- END HISTORY ---\n\n")
@@ -94,7 +110,7 @@ func (cm *ContextManager) SummarizeEarlyEntries(entries []session.Entry, keepLas
 		{Role: "user", Content: sb.String()},
 	}
 
-	resp, err := stream.RetryChat(context.Background(), cm.provider, &llm.Request{Messages: messages})
+	resp, err := stream.RetryChat(context.Background(), cm.provider, &llm.Request{Messages: messages}, cm.retryConfig)
 	if err != nil {
 		return nil, err
 	}
