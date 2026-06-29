@@ -35,5 +35,7 @@ hello_server.exe
 # ── Secrets ──
 .omnidev-agent.json
 
-# ── Local runtime / collaboration logs (never commit) ──
-.ai_history/
+# ── Local runtime (omnidev-agent program — do not commit) ──
+.ai_history/*
+!.ai_history/logs/
+!.ai_history/logs/**
