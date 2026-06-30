@@ -15,6 +15,11 @@ func (c *Config) PipelineOptions() agent.PipelineOptions {
 	if c.PipelineUseLLMComplexity {
 		out.UseLLMComplexity = true
 	}
+	if c.PipelineUseLLMAcceptance {
+		out.UseLLMAcceptance = true
+	} else {
+		out.UseLLMAcceptance = false
+	}
 	if c.PipelinePlanMode > 0 {
 		out.PlanMode = c.PipelinePlanMode
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -17,11 +16,18 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/stream"
 )
 
+// TaskContract defines programmatic success checks for a sub-task.
+type TaskContract struct {
+	MinWriteOps int `json:"min_write_ops,omitempty"`
+	MinReadOps  int `json:"min_read_ops,omitempty"`
+}
+
 // Task represents a unit of work that may depend on other tasks.
 type Task struct {
-	ID          string   `json:"id"`
-	Description string   `json:"description"`
-	DependsOn   []string `json:"depends_on,omitempty"`
+	ID          string        `json:"id"`
+	Description string        `json:"description"`
+	DependsOn   []string      `json:"depends_on,omitempty"`
+	Contract    *TaskContract `json:"contract,omitempty"`
 }
 
 // TaskResult captures the outcome of a single sub-task execution.
@@ -70,8 +76,8 @@ type DispatcherOptions struct {
 func DefaultDispatcherOptions() DispatcherOptions {
 	return DispatcherOptions{
 		MaxParallel:        4,
-		SubAgentTimeout:    120 * time.Second,
-		SubAgentMaxTurns:   10,
+		SubAgentTimeout:    180 * time.Second,
+		SubAgentMaxTurns:   15,
 		SubAgentMaxRetries: 0,
 	}
 }
@@ -104,23 +110,24 @@ func (d *TaskDispatcher) SetCheckpointStore(cs *CheckpointStore) {
 
 // Dispatch decomposes the instruction and executes tasks with checkpoint support.
 // Always decomposes (simple tasks yield a single-task plan).
-func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh chan<- tea.Msg) (bool, error) {
+func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh chan<- tea.Msg) (DispatchOutcome, error) {
 	// Check for existing checkpoint (resume scenario)
 	cp, _ := d.checkpointLoad()
 	if cp != nil && cp.Phase != CheckpointDone {
 		reply := make(chan CheckpointResponse, 1)
 		msgCh <- CheckpointPromptMsg{
-			Phase:     string(cp.Phase),
-			Completed: len(cp.Results),
-			Total:     len(cp.Tasks),
-			Reply:     reply,
+			Phase:                string(cp.Phase),
+			Completed:            len(cp.Results),
+			Total:                len(cp.Tasks),
+			AcceptanceIncomplete: cp.AcceptanceIncomplete,
+			Reply:                reply,
 		}
 		var resume bool
 		select {
 		case resp := <-reply:
 			resume = resp.Resume
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return OutcomeNotHandled, ctx.Err()
 		}
 		if resume {
 			msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(cp.Tasks)}
@@ -129,6 +136,8 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 		d.checkpointClear()
 	}
 
+	acceptancePlan := d.agent.ensureAcceptancePlan(ctx, instruction)
+
 	// Fresh start: decompose then execute
 	tasks, err := d.Plan(ctx, instruction)
 	if err != nil {
@@ -136,13 +145,15 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 			Content: fmt.Sprintf("Decomposition failed (%v), falling back to sequential execution.", err),
 			Done:    true,
 		}
-		return false, err
+		return OutcomeNotHandled, err
 	}
+	tasks = attachTaskContracts(tasks)
 
 	cp = &Checkpoint{
-		Phase:       CheckpointDecomposed,
-		Tasks:       tasks,
-		Instruction: instruction,
+		Phase:          CheckpointDecomposed,
+		Tasks:          tasks,
+		Instruction:    instruction,
+		AcceptancePlan: acceptancePlan,
 	}
 	d.checkpointSave(cp)
 
@@ -151,12 +162,12 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 	if len(tasks) > 1 {
 		confirmed, err := d.waitForPlanConfirm(ctx, msgCh, len(tasks))
 		if err != nil {
-			return false, err
+			return OutcomeNotHandled, err
 		}
 		if !confirmed {
 			d.checkpointClear()
 			msgCh <- StreamChunkMsg{Content: "Task plan cancelled.", Done: true}
-			return true, nil
+			return OutcomeCancelled, nil
 		}
 	}
 
@@ -171,38 +182,55 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 		msgCh <- StreamChunkMsg{Content: "Executing task, then build/test verification.", Done: true}
 		msgCh <- SubtaskMsg{TaskID: implTasks[0].ID, Status: "running", Label: implTasks[0].Description}
 		if err := d.agent.agentLoop(ctx, msgCh, true); err != nil {
-			return false, err
+			return OutcomeNotHandled, err
 		}
-		if d.agent.state != StateError {
-			msgCh <- SubtaskMsg{TaskID: implTasks[0].ID, Status: "done", Label: implTasks[0].Description}
-			result := d.runVerificationTask(ctx, *verifyTask, msgCh)
-			projectDir := d.agent.OutputDir()
-			if result.Success {
-				d.agent.signalTaskComplete(ctx, msgCh, true, 1, projectDir, []TaskResult{result})
-			} else {
-				d.agent.setState(StateError)
-				msgCh <- StreamChunkMsg{Content: "Verification failed after retries.", Done: true}
-				msgCh <- ErrorMsg{Error: result.Error}
+		if d.agent.state == StateError {
+			d.signalDispatchFailed(ctx, msgCh, instruction, nil, cp.Results, "implementation failed")
+			d.checkpointClearUnlessResumable(nil)
+			return OutcomeFailed, nil
+		}
+		if ok, why := validateSubTaskResult(implTasks[0], d.agent.session, d.agent.resolveVerifyDir(), d.agent.acceptanceStrict); !ok {
+			d.agent.signalTaskFailed(ctx, msgCh, fmt.Sprintf("task %s: %s", implTasks[0].ID, why), nil, nil)
+			d.checkpointClearUnlessResumable(nil)
+			return OutcomeFailed, nil
+		}
+		msgCh <- SubtaskMsg{TaskID: implTasks[0].ID, Status: "done", Label: implTasks[0].Description}
+		result := d.runVerificationTask(ctx, *verifyTask, msgCh)
+		projectDir := d.agent.resolveVerifyDir()
+		if result.Success {
+			statuses, accepted := d.agent.driveUntilAccepted(ctx, msgCh, instruction, true, []TaskResult{result})
+			cp.CriteriaStatus = statuses
+			d.checkpointSave(cp)
+			if accepted {
+				d.agent.signalTaskComplete(ctx, msgCh, true, 1, projectDir, []TaskResult{result}, statuses)
+				d.checkpointClear()
+				return OutcomeSuccess, nil
 			}
+			d.agent.signalTaskFailed(ctx, msgCh, "could not complete task after autonomous recovery", statuses, []TaskResult{result})
+			d.checkpointClearUnlessResumable(statuses)
+			return OutcomeFailed, nil
 		}
-		d.checkpointClear()
-		return true, nil
+		d.agent.signalTaskFailed(ctx, msgCh, result.Error, nil, []TaskResult{result})
+		d.checkpointClearUnlessResumable(nil)
+		return OutcomeFailed, nil
 	}
 
 	err = d.executeTasksWithCheckpoint(ctx, cp, msgCh)
 	if err != nil {
-		return false, err
+		return OutcomeNotHandled, err
 	}
-	d.mergeResults(ctx, cp.Results, msgCh)
-	d.checkpointClear()
-	return true, nil
+	outcome := d.mergeResults(ctx, instruction, cp, msgCh)
+	if outcome == OutcomeSuccess {
+		d.checkpointClear()
+	}
+	return outcome, nil
 }
 
 // Plan decomposes an instruction into sub-tasks using the LLM (default).
 // Mode 0/1: LLM decides whether to return one task or many. Mode 2: skip LLM, single task.
 func (d *TaskDispatcher) Plan(ctx context.Context, instruction string) ([]Task, error) {
 	if d.agent.pipelineOpts.PlanMode == 2 {
-		return ensureVerificationTask([]Task{{ID: "1", Description: instruction}}), nil
+		return ensureVerificationTask([]Task{{ID: "1", Description: instruction}}, instruction), nil
 	}
 
 	layoutHint := ""
@@ -253,15 +281,24 @@ Multi-task example:
 	if len(tasks) == 0 {
 		tasks = []Task{{ID: "1", Description: instruction}}
 	}
-	return ensureVerificationTask(tasks), nil
+	return ensureVerificationTask(tasks, instruction), nil
 }
 
 // dispatchWithCheckpoint handles resume after a checkpoint is found.
-func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction string, cp *Checkpoint, msgCh chan<- tea.Msg) (bool, error) {
+func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction string, cp *Checkpoint, msgCh chan<- tea.Msg) (DispatchOutcome, error) {
 	if cp.Phase == CheckpointDone {
 		d.checkpointClear()
 		msgCh <- StreamChunkMsg{Content: "Previous session completed. Starting fresh.", Done: true}
-		return false, nil
+		return OutcomeNotHandled, nil
+	}
+
+	if len(cp.AcceptancePlan.Criteria) > 0 {
+		d.agent.acceptancePlan = &cp.AcceptancePlan
+	}
+
+	if cp.AcceptanceIncomplete && len(cp.CriteriaStatus) > 0 {
+		gap := formatAcceptanceGaps(cp.CriteriaStatus, true, "")
+		d.agent.session.AddWithState("system", "[ACCEPTANCE RESUME]\n"+exitGateNudgePrefix+"\n\n"+gap, StateVerifying.String(), 0)
 	}
 
 	msgCh <- StreamChunkMsg{
@@ -272,11 +309,13 @@ func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction
 
 	err := d.executeTasksWithCheckpoint(ctx, cp, msgCh)
 	if err != nil {
-		return false, err
+		return OutcomeNotHandled, err
 	}
-	d.mergeResults(ctx, cp.Results, msgCh)
-	d.checkpointClear()
-	return true, nil
+	outcome := d.mergeResults(ctx, instruction, cp, msgCh)
+	if outcome == OutcomeSuccess {
+		d.checkpointClear()
+	}
+	return outcome, nil
 }
 
 // executeTasksWithCheckpoint filters already-completed tasks and runs pending ones.
@@ -363,6 +402,28 @@ func (d *TaskDispatcher) executeTasks(ctx context.Context, allTasks []Task, comp
 	return results
 }
 
+// scaleSubAgentLimits bumps turns/timeout for heavier sub-tasks.
+func scaleSubAgentLimits(task Task, baseTurns int, baseTimeout time.Duration) (int, time.Duration) {
+	turns := baseTurns
+	timeout := baseTimeout
+	if len(task.DependsOn) > 0 || len(task.Description) > 120 {
+		turns += 5
+		timeout += 60 * time.Second
+	}
+	if len(task.Description) > 240 {
+		turns += 5
+		timeout += 60 * time.Second
+	}
+	if turns > 25 {
+		turns = 25
+	}
+	maxTimeout := 5 * time.Minute
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
+	return turns, timeout
+}
+
 // runSubAgent creates a lightweight sub-agent that executes a single task.
 func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<- tea.Msg) TaskResult {
 	if IsVerificationTask(task) {
@@ -388,18 +449,22 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 		subGuard := NewProjectAwarenessGuard(d.agent.toolbox, subSess, "")
 		subGuard.state = GuardDone
 
+		scaledTurns, scaledTimeout := scaleSubAgentLimits(task, d.subAgentMaxTurns, d.subAgentTimeout)
+
 		subAgent := &Agent{
 			state:                 StateIdle,
 			provider:              d.agent.provider,
 			permChecker:           d.agent.permChecker,
 			toolbox:               d.agent.toolbox,
 			session:               subSess,
-			maxTurns:              d.subAgentMaxTurns,
+			maxTurns:              scaledTurns,
 			subAgent:              true,
 			guard:                 subGuard,
 			ctxMgr:                d.agent.ctxMgr,
 			retryConfig:           d.agent.retryConfig,
 			maxConsecutiveDenials: d.agent.maxConsecutiveDenials,
+			acceptanceStrict:      d.agent.acceptanceStrict,
+			pipelineOpts:          d.agent.pipelineOpts,
 		}
 		if dir := d.agent.OutputDir(); dir != "" {
 			subAgent.SetOutputDir(dir)
@@ -407,7 +472,7 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 		subAgent.SetProjectLayout(d.agent.ProjectLayout())
 		subAgent.SetActiveSubtaskID(task.ID)
 
-		timeoutCtx, cancel := context.WithTimeout(ctx, d.subAgentTimeout)
+		timeoutCtx, cancel := context.WithTimeout(ctx, scaledTimeout)
 		err := subAgent.RunLoop(timeoutCtx, task.Description, msgCh)
 		cancel()
 
@@ -424,7 +489,41 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 			return result
 		}
 
+		if subAgent.state == StateError {
+			result.Success = false
+			result.Error = "sub-agent stopped before satisfying acceptance gate"
+			msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: result.Error}
+			return result
+		}
+
+		verifyDir := subAgent.resolveVerifyDir()
+		if verifyDir != "" && !IsVerificationTask(task) {
+			if !subAgent.runVerifyFixUntilPass(ctx, msgCh, verifyDir) {
+				result.Success = false
+				result.Error = "verification failed after retries"
+				lastResult = result
+				if attempt+1 < maxAttempts {
+					msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: result.Error}
+					continue
+				}
+				msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: result.Error}
+				return result
+			}
+		}
+
 		result.Content = subAgent.session.LastAssistantContent()
+		if ok, why := validateSubTaskResult(task, subAgent.session, subAgent.resolveVerifyDir(), d.agent.acceptanceStrict); !ok {
+			result.Success = false
+			result.Error = why
+			lastResult = result
+			if attempt+1 < maxAttempts {
+				msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: why}
+				continue
+			}
+			msgCh <- SubtaskMsg{TaskID: task.ID, Status: "error", Label: why}
+			return result
+		}
+
 		result.Success = true
 		msgCh <- SubtaskMsg{TaskID: task.ID, Status: "done", Label: task.Description}
 		return result
@@ -433,37 +532,44 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 	return lastResult
 }
 
-// mergeResults injects sub-task results into the parent session and emits summary.
-func (d *TaskDispatcher) mergeResults(ctx context.Context, results []TaskResult, msgCh chan<- tea.Msg) {
+// mergeResults injects sub-task results, audits evidence, runs final acceptance, and signals outcome.
+func (d *TaskDispatcher) mergeResults(ctx context.Context, instruction string, cp *Checkpoint, msgCh chan<- tea.Msg) DispatchOutcome {
+	results := cp.Results
 	var sb strings.Builder
 	sb.WriteString("[SUB-TASK RESULTS]\n")
-	allOK := true
 	for _, r := range results {
 		status := "OK"
 		if !r.Success {
 			status = "FAILED"
-			allOK = false
 		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", status, r.TaskID, r.Content))
 		if r.Error != "" {
 			sb.WriteString(fmt.Sprintf("  error: %s\n", r.Error))
 		}
 	}
-
 	d.agent.session.AddWithState("system", sb.String(), StateDone.String(), 0)
 
-	projectDir := d.agent.OutputDir()
-	if projectDir != "" {
-		if abs, err := filepath.Abs(projectDir); err == nil {
-			projectDir = abs
-		}
+	projectDir := d.agent.resolveVerifyDir()
+	tasksOK := auditSubTaskResults(results)
+	statuses, accepted := d.agent.driveUntilAccepted(ctx, msgCh, instruction, true, results)
+	cp.CriteriaStatus = statuses
+	d.checkpointSave(cp)
+
+	if tasksOK && accepted && allCriteriaMet(statuses) {
+		d.agent.signalTaskComplete(ctx, msgCh, true, len(results), projectDir, results, statuses)
+		return OutcomeSuccess
 	}
-	if allOK {
-		conclusion := d.agent.BuildFinalConclusion(ctx, results)
-		msgCh <- NewAllComplete(conclusion, projectDir)
-	} else {
-		msgCh <- StreamChunkMsg{Content: "Some sub-tasks failed. See details above.", Done: true}
+
+	reason := "could not complete task after autonomous recovery"
+	if !tasksOK {
+		reason = "one or more sub-tasks failed"
 	}
+	d.agent.signalTaskFailed(ctx, msgCh, reason, statuses, results)
+	return OutcomeFailed
+}
+
+func (d *TaskDispatcher) signalDispatchFailed(ctx context.Context, msgCh chan<- tea.Msg, instruction string, statuses []CriterionStatus, results []TaskResult, reason string) {
+	d.agent.signalTaskFailed(ctx, msgCh, reason, statuses, results)
 }
 
 func tasksToPlanItems(tasks []Task) []TaskPlanItem {
@@ -496,11 +602,11 @@ func (d *TaskDispatcher) Rollback(ctx context.Context, taskID string, msgCh chan
 	if err != nil {
 		return false, err
 	}
-	d.mergeResults(ctx, cp.Results, msgCh)
-	if cp.Phase == CheckpointDone {
+	outcome := d.mergeResults(ctx, cp.Instruction, cp, msgCh)
+	if outcome == OutcomeSuccess {
 		d.checkpointClear()
 	}
-	return true, nil
+	return outcome == OutcomeSuccess, nil
 }
 
 // showTaskPlan sends the task plan to the TUI.
@@ -585,6 +691,13 @@ func (d *TaskDispatcher) checkpointLoad() (*Checkpoint, error) {
 		return nil, nil
 	}
 	return d.checkpointStore.Load()
+}
+
+func (d *TaskDispatcher) checkpointClearUnlessResumable(criteria []CriterionStatus) {
+	if d.agent.acceptanceStrict && len(criteria) > 0 && !allCriteriaMet(criteria) {
+		return
+	}
+	d.checkpointClear()
 }
 
 func (d *TaskDispatcher) checkpointClear() {

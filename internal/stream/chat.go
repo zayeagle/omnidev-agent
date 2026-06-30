@@ -8,12 +8,11 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 )
 
-// ChatWithRetry calls the LLM with retry and streams text to onChunk when possible.
-// When tools are present it uses RetryChat (tool_calls need a complete response).
-// When tools are absent it prefers provider.Stream for real incremental output.
+// ChatWithRetry calls the LLM with retry. Network errors keep reconnecting by default
+// (PersistNetworkRetry) until success or ctx cancellation; 4xx fail immediately.
 func ChatWithRetry(ctx context.Context, provider llm.Provider, req *llm.Request, onChunk func(string), cfg RetryConfig) (*llm.Response, error) {
 	if len(req.Tools) == 0 {
-		if resp, err := collectStream(ctx, provider, req, onChunk); err == nil {
+		if resp, err := collectStreamWithRetry(ctx, provider, req, onChunk, cfg); err == nil {
 			return resp, nil
 		}
 	}
@@ -25,6 +24,12 @@ func ChatWithRetry(ctx context.Context, provider llm.Provider, req *llm.Request,
 		EmitChunks(resp.Content, onChunk)
 	}
 	return resp, nil
+}
+
+func collectStreamWithRetry(ctx context.Context, provider llm.Provider, req *llm.Request, onChunk func(string), cfg RetryConfig) (*llm.Response, error) {
+	return retryLLM(ctx, cfg, func() (*llm.Response, error) {
+		return collectStream(ctx, provider, req, onChunk)
+	})
 }
 
 func collectStream(ctx context.Context, provider llm.Provider, req *llm.Request, onChunk func(string)) (*llm.Response, error) {

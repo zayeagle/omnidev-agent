@@ -71,7 +71,7 @@ type readFileTool struct{}
 
 func (t *readFileTool) Name() string { return "read_file" }
 func (t *readFileTool) Description() string {
-	return "Read a file. Use offset (1-based line) and limit (max lines) to paginate. Default limit is 300 lines when omitted."
+	return "Read a file. Prefer search_code first to get line numbers, then read with offset/limit around the match — not the whole file. Default limit is 300 lines when omitted."
 }
 func (t *readFileTool) Level() permissions.Level { return permissions.LevelSafe }
 func (t *readFileTool) Parameters() map[string]interface{} {
@@ -83,11 +83,11 @@ func (t *readFileTool) Parameters() map[string]interface{} {
 		},
 		"offset": map[string]interface{}{
 			"type":        "integer",
-			"description": "1-based line number to start reading. Default 1.",
+			"description": "1-based line to start reading. Set from search_code file:line hits (expand ±50–100 lines for context). Default 1.",
 		},
 		"limit": map[string]interface{}{
 			"type":        "integer",
-			"description": "Maximum lines to read from offset. Default: all remaining lines.",
+			"description": "Max lines from offset. Use a narrow window (e.g. 100–200) after search_code; default 300 when omitted.",
 		},
 	}
 }
@@ -172,14 +172,14 @@ type searchCodeTool struct{}
 
 func (t *searchCodeTool) Name() string { return "search_code" }
 func (t *searchCodeTool) Description() string {
-	return "Search code for keywords or regex. Match count is capped; full results spooled when large."
+	return "Search code for keywords or regex. Returns file:line: content — use line numbers as read_file offset. Run before read_file when locating functions or symbols."
 }
 func (t *searchCodeTool) Level() permissions.Level { return permissions.LevelSafe }
 func (t *searchCodeTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"query": map[string]interface{}{
 			"type":        "string",
-			"description": "Keyword or regex pattern to search for.",
+			"description": "Keyword, symbol name, or regex. Hit line numbers feed read_file offset.",
 			"required":    true,
 		},
 		"path": map[string]interface{}{

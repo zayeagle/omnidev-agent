@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -13,10 +14,8 @@ const verificationTaskPrefix = "verify:"
 
 const defaultVerifyFixPrompt = `[VERIFICATION FAILED] Build or tests did not pass.
 
-Analyze the errors above, fix the code, and resolve missing dependencies.
-- Use shell_exec for go mod tidy, go get, npm install, etc. when needed (these require user approval unless yolo mode).
-- Re-check with go build ./... and go test ./... only — never go run or dev servers.
-- Stop calling tools only when verification would pass.`
+Classify the failure before editing code: path/workspace, environment, unit tests, or application logic.
+See verify_diagnosis in the recovery prompt for structured guidance.`
 
 // IsVerificationTask reports whether a planned task is the auto-appended verify step.
 func IsVerificationTask(t Task) bool {
@@ -24,7 +23,8 @@ func IsVerificationTask(t Task) bool {
 }
 
 // ensureVerificationTask appends a final verify step depending on all leaf tasks.
-func ensureVerificationTask(tasks []Task) []Task {
+// When the user did not ask for unit tests, only go build is required (avoids unsolicited test authoring).
+func ensureVerificationTask(tasks []Task, instruction string) []Task {
 	if len(tasks) == 0 {
 		return tasks
 	}
@@ -37,9 +37,13 @@ func ensureVerificationTask(tasks []Task) []Task {
 	if len(leaves) == 0 {
 		leaves = []string{tasks[len(tasks)-1].ID}
 	}
+	desc := verificationTaskPrefix + " run go build ./...; fix compile and dependency issues until build passes"
+	if userExplicitlyWantsTests(instruction) {
+		desc = verificationTaskPrefix + " run go build ./... and go test ./...; fix compile, test, and dependency issues until all pass"
+	}
 	return append(tasks, Task{
 		ID:          nextNumericTaskID(tasks),
-		Description: verificationTaskPrefix + " run go build ./... and go test ./...; fix compile, test, and dependency issues until all pass",
+		Description: desc,
 		DependsOn:   leaves,
 	})
 }
@@ -100,7 +104,13 @@ func nextNumericTaskID(tasks []Task) string {
 func (d *TaskDispatcher) runVerificationTask(ctx context.Context, task Task, msgCh chan<- tea.Msg) TaskResult {
 	msgCh <- SubtaskMsg{TaskID: task.ID, Status: "running", Label: task.Description}
 
-	projectDir := d.agent.OutputDir()
+	projectDir := d.agent.resolveVerifyDir()
+	if projectDir == "" {
+		cwd, err := os.Getwd()
+		if err == nil {
+			projectDir = cwd
+		}
+	}
 	if projectDir == "" {
 		return TaskResult{TaskID: task.ID, Success: false, Error: "no project workspace for verification"}
 	}

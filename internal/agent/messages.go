@@ -22,6 +22,11 @@ type AgentStateMsg struct {
 	State State
 }
 
+// ActivityMsg reports what the agent is doing right now (shown in the working indicator).
+type ActivityMsg struct {
+	Detail string
+}
+
 // StreamChunkMsg carries one chunk of streaming LLM output.
 type StreamChunkMsg struct {
 	Content string
@@ -54,10 +59,11 @@ type ConfirmRequestMsg struct {
 
 // CheckpointPromptMsg asks whether to resume an in-progress checkpoint.
 type CheckpointPromptMsg struct {
-	Phase     string
-	Completed int
-	Total     int
-	Reply     chan<- CheckpointResponse
+	Phase                string
+	Completed            int
+	Total                int
+	AcceptanceIncomplete bool
+	Reply                chan<- CheckpointResponse
 }
 
 // CheckpointResponse is the user's decision on checkpoint resume.
@@ -99,6 +105,32 @@ type TaskPlanConfirmResponse struct {
 
 // AllCompleteMsg signals that every sub-task finished successfully.
 type AllCompleteMsg struct {
+	Summary            string
+	ProjectDir         string
+	AcceptanceDetail   string // full formatAcceptanceReport; shown when user expands
+	AcceptancePassed   bool
+	AcceptancePassedN  int
+	AcceptanceTotalN   int
+}
+
+// VerificationProgressMsg reports acceptance-criteria progress during verify phase.
+type VerificationProgressMsg struct {
+	Passed   int
+	Total    int
+	Criteria []CriterionStatus
+	Detail   string // full per-criterion report (legacy / headless)
+	AllMet   bool
+	InitChecklist bool // true: show all criteria as pending (○)
+	CheckedIndex  int  // >=0: one criterion just finished checking
+	AppendText    string // optional extra criterion row (mechanical verify)
+	Finalize      bool   // true: verification round complete
+}
+
+// PartialCompleteMsg signals incomplete or failed completion (no success banner).
+type PartialCompleteMsg struct {
 	Summary    string
 	ProjectDir string
+	Criteria   []CriterionStatus
+	Reason     string
+	Resumable  bool // checkpoint preserved; user can resume
 }

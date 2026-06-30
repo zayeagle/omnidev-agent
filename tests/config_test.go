@@ -95,11 +95,11 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.MaxParallel != 4 {
 		t.Errorf("expected default max_parallel 4, got %d", cfg.MaxParallel)
 	}
-	if cfg.SubAgentTimeout != 120 {
-		t.Errorf("expected default sub_agent_timeout 120, got %d", cfg.SubAgentTimeout)
+	if cfg.SubAgentTimeout != 180 {
+		t.Errorf("expected default sub_agent_timeout 180, got %d", cfg.SubAgentTimeout)
 	}
-	if cfg.SubAgentMaxTurns != 10 {
-		t.Errorf("expected default sub_agent_max_turns 10, got %d", cfg.SubAgentMaxTurns)
+	if cfg.SubAgentMaxTurns != 15 {
+		t.Errorf("expected default sub_agent_max_turns 15, got %d", cfg.SubAgentMaxTurns)
 	}
 	if cfg.LLMMaxRetries != 3 {
 		t.Errorf("expected default llm_max_retries 3, got %d", cfg.LLMMaxRetries)

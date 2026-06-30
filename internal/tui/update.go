@@ -52,6 +52,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAgentMsg(msg)
 	case agent.AllCompleteMsg:
 		m.handleAgentMsg(msg)
+	case agent.VerificationProgressMsg:
+		m.handleAgentMsg(msg)
+	case agent.PartialCompleteMsg:
+		m.handleAgentMsg(msg)
 	case agent.ConfirmRequestMsg:
 		m.handleAgentMsg(msg)
 		return m, tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
@@ -230,8 +234,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if m.isWorking() {
 			return nil
 		}
+		m.input.PushHistory(input)
 		m.input.Submit()
-		m.newTurn(input)
+		t := m.newTurn(input)
+		t.SetViaAgent(true)
 		return m.startAgentLoop(input)
 
 	case tea.KeyTab:
@@ -278,16 +284,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.input.MoveEnd()
 		}
 	case tea.KeyUp:
-		if keyUsesInputHistory(msg) {
-			m.input.HistPrev()
-		} else {
+		if m.isWorking() || keyScrollsTranscript(msg) {
 			m.turns.ScrollUp(3, m.transcriptViewportHeight())
+		} else {
+			m.input.HistPrev()
 		}
 	case tea.KeyDown:
-		if keyUsesInputHistory(msg) {
-			m.input.HistNext()
-		} else {
+		if m.isWorking() || keyScrollsTranscript(msg) {
 			m.turns.ScrollDown(3, m.transcriptViewportHeight())
+		} else {
+			m.input.HistNext()
 		}
 	case tea.KeyPgUp:
 		m.turns.ScrollUp(m.transcriptViewportHeight()-1, m.transcriptViewportHeight())
@@ -342,9 +348,21 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 	case agent.AgentStateMsg:
 		m.agentState = msg.State.String()
 
+	case agent.ActivityMsg:
+		if t != nil {
+			t.SetActivityDetail(msg.Detail)
+			if isMajorProcessMessage(msg.Detail) {
+				t.AddStatusLine("→ " + msg.Detail)
+			}
+		}
+
 	// ── Pipeline: Classification ──
 	case agent.StreamChunkMsg:
 		trimmed := strings.TrimSpace(msg.Content)
+		if strings.HasPrefix(trimmed, "── Acceptance verification") || strings.HasPrefix(trimmed, "── Acceptance failure") {
+			t.ShowAcceptanceReport(trimmed, false, 0, 0)
+			break
+		}
 		if strings.Contains(trimmed, "Requirements analysis") {
 			t.StartStep(components.StepAnalyze)
 			t.CompleteStep(components.StepAnalyze, "requirements")
@@ -356,6 +374,10 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 			if msg.Done {
 				t.FlushReply("")
 			}
+			break
+		}
+		if isAgentProcessMessage(trimmed) {
+			t.AddStatusLine("→ " + trimmed)
 			break
 		}
 		if appendText, marker, ok := prepareStreamChunk(msg.Content); ok {
@@ -401,11 +423,65 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 
 	case agent.AllCompleteMsg:
 		if !t.IsChatMode() {
-			t.SetCompletion(msg.Summary, msg.ProjectDir)
+			if strings.TrimSpace(msg.AcceptanceDetail) != "" {
+				t.SetCompletionAcceptance(msg.Summary, msg.ProjectDir, msg.AcceptanceDetail, msg.AcceptancePassed, msg.AcceptancePassedN, msg.AcceptanceTotalN)
+			} else {
+				t.SetCompletion(msg.Summary, msg.ProjectDir)
+			}
 			for _, tk := range t.Tasks {
 				if tk.Status != components.StatusFailed && tk.Status != components.StatusSuccess {
 					tk.Status = components.StatusSuccess
 				}
+			}
+		}
+		m.turns.ScrollToBottom()
+
+	case agent.VerificationProgressMsg:
+		if !t.IsChatMode() {
+			if msg.InitChecklist {
+				texts := make([]string, len(msg.Criteria))
+				for i, c := range msg.Criteria {
+					texts[i] = c.Text
+				}
+				t.InitAcceptanceChecklist(texts)
+				break
+			}
+			if msg.AppendText != "" {
+				t.AppendAcceptanceCheck(msg.AppendText)
+			}
+			if msg.CheckedIndex >= 0 && msg.CheckedIndex < len(msg.Criteria) {
+				c := msg.Criteria[msg.CheckedIndex]
+				t.UpdateAcceptanceCheck(msg.CheckedIndex, c.Met, c.Evidence)
+			}
+			if msg.Finalize && msg.Total > 0 {
+				t.FinishAcceptanceChecklist(msg.Passed, msg.Total, msg.AllMet)
+			}
+			// Full report is shown in collapsible completion panel, not inline during success path.
+			if msg.Detail != "" && !msg.AllMet {
+				t.AddStatusBlock(msg.Detail)
+			}
+		}
+
+	case agent.PartialCompleteMsg:
+		if !t.IsChatMode() {
+			if len(msg.Criteria) > 0 {
+				detail := formatPartialAcceptanceDetail(msg.Criteria)
+				passed := 0
+				for _, c := range msg.Criteria {
+					if c.Met {
+						passed++
+					}
+				}
+				t.ShowAcceptanceReport(detail, false, passed, len(msg.Criteria))
+			}
+			t.MarkError(msg.Summary)
+			for _, tk := range t.Tasks {
+				if tk.Status == components.StatusRunning || tk.Status == components.StatusPending {
+					tk.Status = components.StatusFailed
+				}
+			}
+			if msg.Resumable {
+				t.AddStatusLine("Acceptance incomplete — restart and choose Resume to continue from checkpoint (从验收断点继续).")
 			}
 		}
 		m.turns.ScrollToBottom()
@@ -457,6 +533,9 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		m.checkpointReply = msg.Reply
 		if t != nil {
 			t.AddStatusLine(fmt.Sprintf("Checkpoint: %d/%d tasks done (%s)", msg.Completed, msg.Total, msg.Phase))
+			if msg.AcceptanceIncomplete {
+				t.AddStatusLine("Previous run stopped at acceptance gate — Resume to continue (从验收断点继续).")
+			}
 		}
 
 	// ── Confirmation ──
@@ -493,6 +572,11 @@ func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if m.tasksToggleAtLine >= 0 && msg.Y >= m.tasksToggleAtLine-1 && msg.Y <= m.tasksToggleAtLine+1 {
 			if t := m.currentTurn(); t != nil && t.HasCompletion() && len(t.Tasks) > 0 {
 				t.ToggleTasksExpanded()
+			}
+		}
+		if m.acceptanceToggleAtLine >= 0 && msg.Y >= m.acceptanceToggleAtLine-1 && msg.Y <= m.acceptanceToggleAtLine+1 {
+			if t := m.currentTurn(); t != nil && t.HasCompletion() && strings.TrimSpace(t.AcceptanceDetailText()) != "" {
+				t.ToggleAcceptanceExpanded()
 			}
 		}
 	}
@@ -633,8 +717,8 @@ func (m *model) showHelp() {
 		"  /checkpoint rollback <task_id> — rollback and re-run from task\n" +
 		"  quit, exit, Ctrl+C — exit\n" +
 		"\n" +
-		"Keyboard: ↑↓/PgUp/PgDn scroll · Home/End jump (empty input) · Ctrl/Alt+↑↓ history\n" +
-		"          Tab/Enter/Space expand Thinking · t/Enter expand To-dos · click To-dos row\n" +
+		"Keyboard: ↑↓ history · PgUp/PgDn scroll · Home/End jump (empty input) · Ctrl/Alt+↑↓ scroll\n" +
+		"          Tab/Enter/Space expand Thinking · t/Enter expand To-dos · activity above input\n" +
 		"          Ctrl+Y toggle confirm/yolo · Esc cancel · Y/N/A confirm")
 }
 
@@ -846,7 +930,43 @@ func parseAllTaskLines(t *components.Turn, content string) {
 	}
 }
 
-func keyUsesInputHistory(msg tea.KeyMsg) bool {
+func isAgentProcessMessage(content string) bool {
+	lower := strings.ToLower(content)
+	return isMajorProcessMessage(content) || strings.Contains(lower, "calling model")
+}
+
+func isMajorProcessMessage(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(content), "calling model") {
+		return false
+	}
+	markers := []string{
+		"Checking acceptance",
+		"Final acceptance",
+		"Working ·",
+		"Acceptance ",
+		"recovery round",
+		"autonomous recovery",
+		"Review incomplete",
+		"Network error",
+		"LLM unreachable",
+		"auto-reconnecting",
+		"Stopped:",
+		"── Acceptance",
+		"[验收",
+	}
+	for _, m := range markers {
+		if strings.Contains(content, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func keyScrollsTranscript(msg tea.KeyMsg) bool {
 	s := strings.ToLower(msg.String())
 	return strings.HasPrefix(s, "ctrl+") || strings.HasPrefix(s, "alt+")
 }
@@ -905,4 +1025,20 @@ func (m *model) showSession(arg string) {
 		return
 	}
 	t.SetCommandOutput(detail)
+}
+
+func formatPartialAcceptanceDetail(criteria []agent.CriterionStatus) string {
+	var b strings.Builder
+	b.WriteString("── Acceptance failure detail ──\n")
+	for _, c := range criteria {
+		mark := "FAIL"
+		if c.Met {
+			mark = "PASS"
+		}
+		b.WriteString(fmt.Sprintf("[%s] %s\n", mark, c.Text))
+		if ev := strings.TrimSpace(c.Evidence); ev != "" {
+			b.WriteString(fmt.Sprintf("      reason: %s\n", ev))
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

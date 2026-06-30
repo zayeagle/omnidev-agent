@@ -18,19 +18,20 @@ var (
 )
 
 // CompletionPanel renders the pinned completion banner and optional collapsible tasks.
-// tasksToggleLine is the 0-based line index within Lines for the click-to-expand row, or -1.
+// TasksToggleLine / AcceptanceToggleLine are 0-based line indices for click-to-expand, or -1.
 type CompletionPanel struct {
-	Lines           []string
-	TasksToggleLine int
+	Lines                 []string
+	TasksToggleLine       int
+	AcceptanceToggleLine  int
 }
 
 // CompletionPanelLayout builds completion UI below the transcript.
 func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
-	out := CompletionPanel{TasksToggleLine: -1}
+	out := CompletionPanel{TasksToggleLine: -1, AcceptanceToggleLine: -1}
 	if t == nil || t.IsChatMode() {
 		return out
 	}
-	if strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" {
+	if strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" && strings.TrimSpace(t.acceptanceDetail) == "" {
 		return out
 	}
 	if width < 20 {
@@ -46,7 +47,22 @@ func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
 	}
 
 	var rows []string
-	if msg := strings.TrimSpace(t.completionMsg); msg != "" {
+	hasAcceptanceDetail := strings.TrimSpace(t.acceptanceDetail) != ""
+
+	if hasAcceptanceDetail {
+		if t.AcceptanceExpanded {
+			for _, line := range strings.Split(t.acceptanceDetail, "\n") {
+				line = strings.TrimRight(line, " \t")
+				if line == "" {
+					rows = append(rows, "")
+					continue
+				}
+				for _, wl := range WrapDisplayWidth(line, inner) {
+					rows = append(rows, completionTextStyle.Render(wl))
+				}
+			}
+		}
+	} else if msg := strings.TrimSpace(t.completionMsg); msg != "" {
 		for _, line := range strings.Split(msg, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -58,6 +74,7 @@ func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
 			}
 		}
 	}
+
 	if t.projectDir != "" {
 		if len(rows) > 0 {
 			rows = append(rows, "")
@@ -66,7 +83,7 @@ func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
 		for _, wl := range WrapDisplayWidth(t.projectDir, inner) {
 			rows = append(rows, completionTextStyle.Render("  "+wl))
 		}
-	} else if len(rows) == 0 {
+	} else if len(rows) == 0 && !hasAcceptanceDetail {
 		return out
 	}
 
@@ -90,8 +107,24 @@ func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
 		}
 	}
 
-	box := completionBoxStyle.Width(boxWidth).Render(strings.Join(rows, "\n"))
-	out.Lines = append(out.Lines, box, "")
+	if hasAcceptanceDetail {
+		chevron := "▸"
+		if t.AcceptanceExpanded {
+			chevron = "▾"
+		}
+		label := fmt.Sprintf("  %s 验收通过 %d/%d · 查看详细", chevron, t.acceptancePassedN, t.acceptanceTotalN)
+		if !t.acceptancePassed {
+			label = fmt.Sprintf("  %s 验收未通过 %d/%d · 查看详细", chevron, t.acceptancePassedN, t.acceptanceTotalN)
+		}
+		out.AcceptanceToggleLine = len(out.Lines)
+		out.Lines = append(out.Lines, completionToggleStyle.Render(label))
+	}
+
+	if len(rows) > 0 {
+		box := completionBoxStyle.Width(boxWidth).Render(strings.Join(rows, "\n"))
+		out.Lines = append(out.Lines, box)
+	}
+	out.Lines = append(out.Lines, "")
 	return out
 }
 

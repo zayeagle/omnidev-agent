@@ -17,7 +17,7 @@ func TestTurnReplyVisibleWithCompletion(t *testing.T) {
 	tn.AppendReply("你好！有什么可以帮你的？")
 	tn.SetCompletion("Task completed.", "")
 
-	body := joinLines(tn.render(80, false))
+	body := joinLines(tn.render(80, false, false))
 	if !containsSubstring(body, "有什么可以帮") {
 		t.Fatalf("reply should remain visible with completion set: %q", body)
 	}

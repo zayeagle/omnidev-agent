@@ -34,6 +34,8 @@ func TestHeadlessDeniesDangerousOps(t *testing.T) {
 	sess := session.New()
 	perm := permissions.NewForRun(true, false) // headless, no yolo
 	a := agent.New(mock, perm, toolbox, sess)
+	a.SetAcceptanceStrict(false)
+	a.SetSubAgent(true)
 
 	msgCh := make(chan tea.Msg, 32)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

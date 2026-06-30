@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultToolResultsKeepFull = 3
+	defaultToolResultsKeepFull = 8
 	defaultContextMinKeep      = 10
 	defaultGuardAnalysisMax    = 4000
 )
@@ -34,7 +34,8 @@ type PipelineOptions struct {
 	UseLLMClassifier   bool
 	UseLLMRequirements bool
 	UseLLMComplexity   bool
-	PlanMode           int // 0=auto LLM decides 1 vs N (default), 1=same as 0, 2=never LLM (single task)
+	UseLLMAcceptance   bool // LLM extract + judge acceptance criteria (default heuristic)
+	PlanMode           int  // 0=auto LLM decides 1 vs N (default), 1=same as 0, 2=never LLM (single task)
 }
 
 func DefaultPipelineOptions() PipelineOptions {
@@ -42,6 +43,7 @@ func DefaultPipelineOptions() PipelineOptions {
 		UseLLMClassifier:   false,
 		UseLLMRequirements: false,
 		UseLLMComplexity:   false,
+		UseLLMAcceptance:   false,
 		PlanMode:           0,
 	}
 }
@@ -82,6 +84,9 @@ func truncateForRef(s string, max int) string {
 
 // SlimToolResultForHistory replaces an old tool result with a one-line continuation handle.
 func SlimToolResultForHistory(name, result string) string {
+	if name == "read_file" {
+		return slimReadFileResultForHistory(result)
+	}
 	ref := extractPartialRef(result)
 	if ref != "" {
 		return fmt.Sprintf("[archived %s result — reload: %s]", name, ref)
@@ -97,6 +102,20 @@ func SlimToolResultForHistory(name, result string) string {
 		preview = "(empty)"
 	}
 	return fmt.Sprintf("[archived %s: %s]", name, preview)
+}
+
+const slimReadFilePreviewMax = 2000
+
+func slimReadFileResultForHistory(result string) string {
+	body := strings.TrimSpace(result)
+	if body == "" {
+		return "[archived read_file — empty result]"
+	}
+	preview := body
+	if len(preview) > slimReadFilePreviewMax {
+		preview = preview[:slimReadFilePreviewMax] + fmt.Sprintf("\n… [%d more chars omitted for context]", len(body)-slimReadFilePreviewMax)
+	}
+	return "[archived read_file — content below; do NOT re-read the same path/offset/limit]\n" + preview
 }
 
 func extractPartialRef(result string) string {

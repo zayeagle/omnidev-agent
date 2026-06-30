@@ -35,6 +35,7 @@ func TestDispatcherSimpleDecomposition(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
 	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
@@ -48,11 +49,11 @@ func TestDispatcherSimpleDecomposition(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	handled, err := dispatcher.Dispatch(ctx, "create two files", msgCh)
+	outcome, err := dispatcher.Dispatch(ctx, "create two files", msgCh)
 	if err != nil {
 		t.Logf("dispatch error (expected with mock): %v", err)
 	}
-	if !handled {
+	if !outcome.Handled() {
 		t.Error("expected two-task plan to be handled by dispatcher")
 	}
 }
@@ -74,6 +75,7 @@ func TestDispatcherSingleTaskHandled(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
 	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
@@ -87,8 +89,8 @@ func TestDispatcherSingleTaskHandled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	handled, _ := dispatcher.Dispatch(ctx, "simple task", msgCh)
-	if !handled {
+	outcome, _ := dispatcher.Dispatch(ctx, "simple task", msgCh)
+	if !outcome.Handled() {
 		t.Error("expected single-task plan to be handled by dispatcher (always decompose)")
 	}
 }
@@ -110,6 +112,7 @@ func TestDispatcherPlanParsing(t *testing.T) {
 	permChecker := permissions.NewChecker(false)
 	sess := session.New()
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
 	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
@@ -123,8 +126,8 @@ func TestDispatcherPlanParsing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	handled, _ := dispatcher.Dispatch(ctx, "create a go project with tests", msgCh)
-	if !handled {
+	outcome, _ := dispatcher.Dispatch(ctx, "create a go project with tests", msgCh)
+	if !outcome.Handled() {
 		t.Error("expected 2-task plan to be handled by dispatcher")
 	}
 }

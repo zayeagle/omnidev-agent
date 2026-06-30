@@ -33,6 +33,12 @@ func (m *model) View() string {
 		pinTasks := m.pinTasksTurn()
 		if pinTasks != nil {
 			panel := components.TaskPanelLines(pinTasks, w, m.pinnedTodoStatus())
+			if acc := components.AcceptancePanelLines(pinTasks, w); len(acc) > 0 {
+				if len(panel) > 0 {
+					panel = append(panel, "")
+				}
+				panel = append(panel, acc...)
+			}
 			if len(panel) > 0 {
 				b.WriteString(strings.Join(panel, "\n"))
 				b.WriteString("\n")
@@ -82,9 +88,15 @@ func (m *model) View() string {
 			} else {
 				m.tasksToggleAtLine = -1
 			}
+			if cp.AcceptanceToggleLine >= 0 {
+				m.acceptanceToggleAtLine = baseLines + cp.AcceptanceToggleLine
+			} else {
+				m.acceptanceToggleAtLine = -1
+			}
 			b.WriteString(strings.Join(cp.Lines, "\n"))
 		} else {
 			m.tasksToggleAtLine = -1
+			m.acceptanceToggleAtLine = -1
 		}
 		b.WriteString("\n")
 		b.WriteString(m.input.View(working, m.turns.Count() > 0, w))

@@ -43,5 +43,18 @@ func TestLLMRetryConfigZeroRetries(t *testing.T) {
 	if rc.MaxRetries != 0 {
 		t.Fatalf("expected 0 retries, got %d", rc.MaxRetries)
 	}
+	if !rc.PersistNetworkRetry {
+		t.Fatal("expected persistent network retry by default")
+	}
 	_ = stream.RetryConfig(rc) // compile-time shape check
+}
+
+func TestLLMRetryConfigDisablePersistNetwork(t *testing.T) {
+	cfg := Default()
+	f := false
+	cfg.LLMPersistNetworkRetry = &f
+	rc := cfg.LLMRetryConfig()
+	if rc.PersistNetworkRetry {
+		t.Fatal("expected persist network disabled")
+	}
 }

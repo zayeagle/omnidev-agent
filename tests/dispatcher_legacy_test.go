@@ -41,6 +41,7 @@ func TestDispatcherLegacyParallelDAG(t *testing.T) {
 	})
 
 	a := agent.New(mock, permissions.NewChecker(false), toolbox, sess)
+	a.SetAcceptanceStrict(false)
 	a.SetPipelineOptions(agent.PipelineOptions{PlanMode: 1})
 
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
@@ -54,11 +55,11 @@ func TestDispatcherLegacyParallelDAG(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	handled, err := dispatcher.Dispatch(ctx, "extend legacy app with two helpers", msgCh)
+	outcome, err := dispatcher.Dispatch(ctx, "extend legacy app with two helpers", msgCh)
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if !handled {
+	if !outcome.Handled() {
 		t.Fatal("expected legacy 3-task plan to be handled by dispatcher")
 	}
 

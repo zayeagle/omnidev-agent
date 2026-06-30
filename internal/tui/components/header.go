@@ -14,7 +14,7 @@ var (
 
 const agentTagline = "Terminal coding agent — read docs, write code, run tools (with approval)."
 
-const agentCommandsHint = "/help /status /skills /model /yolo /clear /sessions /archive /checkpoint · Ctrl+Y confirm↔yolo · Esc cancel · Y/N/A confirm · PgUp/PgDn scroll"
+const agentCommandsHint = "/help /status /skills /model /yolo /clear /sessions /archive /checkpoint · Ctrl+Y confirm↔yolo · Esc cancel · Y/N/A confirm · ↑↓ history · PgUp/PgDn scroll"
 
 // HeaderInfo holds build metadata shown at the top of the TUI.
 type HeaderInfo struct {

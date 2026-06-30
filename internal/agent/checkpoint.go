@@ -21,12 +21,16 @@ const (
 // Checkpoint captures the full state of an in-progress agent session
 // so execution can be resumed or rolled back after an interrupt.
 type Checkpoint struct {
-	Phase     CheckpointPhase `json:"phase"`
-	Tasks     []Task          `json:"tasks"`
-	Results   []TaskResult    `json:"results"`   // accumulated so far
-	Instruction string        `json:"instruction"`
-	Turn      int             `json:"turn"`       // for standard loop fallback
-	Timestamp time.Time       `json:"timestamp"`
+	Phase           CheckpointPhase   `json:"phase"`
+	Tasks           []Task            `json:"tasks"`
+	Results         []TaskResult      `json:"results"` // accumulated so far
+	Instruction     string            `json:"instruction"`
+	AcceptancePlan  AcceptancePlan    `json:"acceptance_plan,omitempty"`
+	CriteriaStatus  []CriterionStatus `json:"criteria_status,omitempty"`
+	ExitGateNudges  int               `json:"exit_gate_nudges,omitempty"`
+	AcceptanceIncomplete bool           `json:"acceptance_incomplete,omitempty"`
+	Turn            int               `json:"turn"` // for standard loop fallback
+	Timestamp       time.Time         `json:"timestamp"`
 }
 
 // CheckpointStore persists and loads checkpoint files.

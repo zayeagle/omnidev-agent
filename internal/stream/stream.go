@@ -2,77 +2,16 @@ package stream
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 )
 
-// RetryConfig controls LLM API retry with exponential backoff.
-type RetryConfig struct {
-	MaxRetries int               // retries after the first attempt (default 3)
-	Backoffs   []time.Duration   // wait before each retry (default 1s, 2s, 4s)
-}
-
-// DefaultRetryConfig returns built-in LLM retry defaults.
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxRetries: 3,
-		Backoffs:   []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second},
-	}
-}
-
-func (rc RetryConfig) normalized() RetryConfig {
-	out := rc
-	if out.MaxRetries < 0 {
-		out.MaxRetries = DefaultRetryConfig().MaxRetries
-	}
-	if len(out.Backoffs) == 0 {
-		out.Backoffs = DefaultRetryConfig().Backoffs
-	}
-	return out
-}
-
-func backoffAt(backoffs []time.Duration, attempt int) time.Duration {
-	if attempt < len(backoffs) {
-		return backoffs[attempt]
-	}
-	return backoffs[len(backoffs)-1]
-}
-
-// RetryChat calls provider.Chat with exponential backoff retry.
+// RetryChat calls provider.Chat with backoff; network errors retry until ctx cancel when enabled.
 func RetryChat(ctx context.Context, provider llm.Provider, req *llm.Request, cfg RetryConfig) (*llm.Response, error) {
-	cfg = cfg.normalized()
-
-	var lastErr error
-	for i := 0; i <= cfg.MaxRetries; i++ {
-		resp, err := provider.Chat(ctx, req)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-
-		// Don't retry if context is cancelled
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
-		}
-		// Client errors (4xx) won't succeed on retry.
-		if isNonRetryableLLMError(err) {
-			return nil, err
-		}
-
-		if i < cfg.MaxRetries {
-			select {
-			case <-time.After(backoffAt(cfg.Backoffs, i)):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-	}
-	attempts := cfg.MaxRetries + 1
-	return nil, fmt.Errorf("llm: failed after %d attempts: %w", attempts, lastErr)
+	return retryLLM(ctx, cfg, func() (*llm.Response, error) {
+		return provider.Chat(ctx, req)
+	})
 }
 
 func isNonRetryableLLMError(err error) bool {

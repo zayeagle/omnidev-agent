@@ -62,13 +62,31 @@ func (il *InputLine) MoveEnd()   { il.cursor = len(il.text) }
 
 func (il *InputLine) Submit() string {
 	t := il.Text()
-	if t != "" {
-		il.history = append(il.history, t)
-	}
 	il.histIdx = -1
 	il.text = make([]rune, 0)
 	il.cursor = 0
 	return t
+}
+
+// PushHistory records a submitted user prompt for ↑↓ recall.
+func (il *InputLine) PushHistory(prompt string) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return
+	}
+	if n := len(il.history); n > 0 && il.history[n-1] == prompt {
+		return
+	}
+	il.history = append(il.history, prompt)
+}
+
+// LoadHistory replaces the prompt history (e.g. when restoring a session).
+func (il *InputLine) LoadHistory(prompts []string) {
+	il.history = nil
+	il.histIdx = -1
+	for _, p := range prompts {
+		il.PushHistory(p)
+	}
 }
 
 func (il *InputLine) HistPrev() {

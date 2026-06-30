@@ -29,8 +29,9 @@ type Config struct {
 	SubAgentMaxTurns      int   `json:"sub_agent_max_turns"`      // default 10
 	SubAgentMaxRetries    int   `json:"sub_agent_max_retries"`    // re-run failed sub-tasks, default 0
 	// LLM request retry (transient API / network errors)
-	LLMMaxRetries         int   `json:"llm_max_retries"`          // default 3 (4 attempts total)
-	LLMRetryBackoffSec    []int `json:"llm_retry_backoff_sec"`    // default [1, 2, 4]
+	LLMMaxRetries              int   `json:"llm_max_retries"`                        // default 3 (4 attempts total) for non-network errors
+	LLMRetryBackoffSec           []int `json:"llm_retry_backoff_sec"`                  // default [1, 2, 4]
+	LLMPersistNetworkRetry       *bool `json:"llm_persist_network_retry,omitempty"`    // default true — network errors retry until success or cancel
 	// Agent loop safety
 	MaxConsecutiveToolDenials int `json:"max_consecutive_tool_denials"` // default 3; 0 = disable abort
 	// Tool output (PARTIAL + spool — full content never silently dropped)
@@ -47,6 +48,7 @@ type Config struct {
 	PipelineUseLLMClassifier   bool `json:"pipeline_use_llm_classifier"`
 	PipelineUseLLMRequirements bool `json:"pipeline_use_llm_requirements"`
 	PipelineUseLLMComplexity    bool `json:"pipeline_use_llm_complexity"`
+	PipelineUseLLMAcceptance    bool `json:"pipeline_use_llm_acceptance"`
 	PipelinePlanMode            int  `json:"pipeline_plan_mode"` // 0=auto LLM plans (default), 1=same as 0, 2=skip LLM plan
 	// Skills (Cursor-style SKILL.md directories)
 	SkillsDirs []string `json:"skills_dirs"`
@@ -91,8 +93,8 @@ func Default() *Config {
 		ContextMaxTokens:           120000,
 		ContextSummarizeThreshold:  0.95,
 		MaxParallel:               4,
-		SubAgentTimeout:           120,
-		SubAgentMaxTurns:          10,
+		SubAgentTimeout:           180,
+		SubAgentMaxTurns:          15,
 		SubAgentMaxRetries:        0,
 		LLMMaxRetries:             3,
 		LLMRetryBackoffSec:        []int{1, 2, 4},
@@ -102,9 +104,10 @@ func Default() *Config {
 		SearchCodeMaxLines:        100,
 		ListDirMaxEntries:         200,
 		ReadFileDefaultLimit:      300,
-		ContextToolResultsKeepFull: 3,
+		ContextToolResultsKeepFull: 8,
 		ContextMinKeepEntries:      10,
 		GuardAnalysisMaxChars:      4000,
+		PipelineUseLLMAcceptance:   false,
 		PipelinePlanMode:           0,
 	}
 }

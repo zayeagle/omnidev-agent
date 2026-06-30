@@ -39,8 +39,9 @@ type model struct {
 	confirmReply       chan<- permissions.ConfirmResponse
 	confirmTimeout     int
 
-	// Line index (0-based) in View output for click-to-expand tasks under completion
-	tasksToggleAtLine int
+	// Line index (0-based) in View output for click-to-expand rows under completion
+	tasksToggleAtLine      int
+	acceptanceToggleAtLine int
 
 	// Checkpoint resume prompt
 	checkpointing      bool
@@ -89,9 +90,14 @@ func (m *model) restoreFromActiveSession() {
 		if ui.OutputDir != "" {
 			m.agent.SetOutputDir(ui.OutputDir)
 		}
-		return
+	} else {
+		m.turnCount = hydrateTurnsFromEntries(m.turns, sess.EntriesCopy())
 	}
-	m.turnCount = hydrateTurnsFromEntries(m.turns, sess.EntriesCopy())
+	m.restoreInputHistory()
+}
+
+func (m *model) restoreInputHistory() {
+	restoreInputHistory(m.input, m.turns)
 }
 
 func (m *model) headerInfo() components.HeaderInfo {
@@ -159,19 +165,32 @@ func (m *model) workingLabel() string {
 }
 
 func (m *model) footerExtra() string {
-	return m.permissionModeLabel()
+	extra := m.permissionModeLabel()
+	if p := m.agent.RunLogPath(); p != "" {
+		if extra != "" {
+			extra += " · "
+		}
+		extra += "log: " + p
+	}
+	return extra
 }
 
 // pinTasksTurn returns the active turn whose task list is pinned above the scroll area.
 func (m *model) pinTasksTurn() *components.Turn {
 	t := m.currentTurn()
-	if t == nil || len(t.Tasks) == 0 || t.HasCompletion() {
+	if t == nil || t.HasCompletion() {
 		return nil
 	}
 	if !m.isWorking() {
 		return nil
 	}
-	return t
+	if len(t.Tasks) > 0 {
+		return t
+	}
+	if t.HasAcceptanceChecklist() {
+		return t
+	}
+	return nil
 }
 
 func (m *model) dialogOverlayHeight() int {

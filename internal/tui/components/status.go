@@ -15,7 +15,7 @@ func NewStatusLabel(state string) string {
 		s = s.Foreground(lipgloss.Color("#6B7280"))
 	case "Thinking":
 		s = s.Foreground(lipgloss.Color("#A78BFA")).Italic(true)
-	case "Executing":
+	case "Executing", "Working":
 		s = s.Foreground(lipgloss.Color("#FBBF24"))
 	case "WaitingApproval":
 		s = s.Foreground(lipgloss.Color("#F87171")).Bold(true)

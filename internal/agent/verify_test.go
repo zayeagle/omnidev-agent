@@ -23,9 +23,10 @@ func TestVerifyProjectWorkspace_BuildOnly(t *testing.T) {
 
 func TestVerifyProjectWorkspace_SkipsWithoutGoMod(t *testing.T) {
 	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "main.py"), "print('hi')\n")
 	summary, ok := VerifyProjectWorkspace(t.Context(), dir)
-	if !ok || summary != "" {
-		t.Fatalf("expected skip, got ok=%v summary=%q", ok, summary)
+	if !ok {
+		t.Fatalf("expected python compile ok or skip, got %q", summary)
 	}
 }
 

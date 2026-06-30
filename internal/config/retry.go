@@ -23,7 +23,18 @@ func (c *Config) LLMRetryConfig() stream.RetryConfig {
 		}
 		backoffs[i] = time.Duration(s) * time.Second
 	}
-	return stream.RetryConfig{MaxRetries: maxRetries, Backoffs: backoffs}
+	return stream.RetryConfig{
+		MaxRetries:          maxRetries,
+		Backoffs:            backoffs,
+		PersistNetworkRetry: c.effectiveLLMPersistNetworkRetry(),
+	}
+}
+
+func (c *Config) effectiveLLMPersistNetworkRetry() bool {
+	if c != nil && c.LLMPersistNetworkRetry != nil {
+		return *c.LLMPersistNetworkRetry
+	}
+	return true
 }
 
 // EffectiveMaxConsecutiveToolDenials returns the denial abort threshold (0 = never abort).

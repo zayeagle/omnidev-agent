@@ -20,6 +20,7 @@ const (
 	StepPlan
 	StepThink
 	StepExec
+	StepVerify
 )
 
 func (s StepType) String() string {
@@ -38,6 +39,8 @@ func (s StepType) String() string {
 		return "think"
 	case StepExec:
 		return "exec"
+	case StepVerify:
+		return "verify"
 	default:
 		return "unknown"
 	}
@@ -58,7 +61,9 @@ func (s StepType) Label() string {
 	case StepThink:
 		return "Thinking"
 	case StepExec:
-		return "Executing"
+		return "Working"
+	case StepVerify:
+		return "Working"
 	default:
 		return "Working"
 	}
@@ -80,6 +85,8 @@ func (s StepType) Icon() string {
 		return "*"
 	case StepExec:
 		return "@"
+	case StepVerify:
+		return "?"
 	default:
 		return "."
 	}
@@ -95,6 +102,7 @@ const (
 	StatusSuccess
 	StatusFailed
 	StatusBlocked
+	StatusSkipped
 )
 
 func (s ItemStatus) Icon() string {
@@ -109,6 +117,8 @@ func (s ItemStatus) Icon() string {
 		return "x"
 	case StatusBlocked:
 		return "!"
+	case StatusSkipped:
+		return "-"
 	default:
 		return " "
 	}
@@ -175,6 +185,9 @@ type Turn struct {
 	// Thinking collapsed state (false = collapsed, true = expanded)
 	ThinkExpanded bool
 
+	// Live activity detail for the working indicator (e.g. "Calling model turn 3/20")
+	activityDetail string
+
 	ToolCalls []*ToolEntry
 	Tasks     []*TaskEntry
 	planSummary string
@@ -192,7 +205,83 @@ type Turn struct {
 	projectDir    string
 	TasksExpanded bool // collapsed under completion banner by default
 
+	acceptanceDetail   string
+	AcceptanceExpanded bool
+	acceptancePassed   bool
+	acceptancePassedN  int
+	acceptanceTotalN   int
+
 	fileChanges []FileChange
+
+	// Live acceptance checklist (○ → ✓ during verify phase)
+	acceptanceChecks []AcceptanceCheckItem
+}
+
+// AcceptanceCheckItem is one row in the acceptance criteria checklist.
+type AcceptanceCheckItem struct {
+	Text     string
+	Status   ItemStatus
+	Evidence string
+}
+
+func (t *Turn) InitAcceptanceChecklist(criteria []string) {
+	t.acceptanceChecks = make([]AcceptanceCheckItem, 0, len(criteria))
+	for _, c := range criteria {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		t.acceptanceChecks = append(t.acceptanceChecks, AcceptanceCheckItem{
+			Text:   c,
+			Status: StatusPending,
+		})
+	}
+	t.StartStep(StepVerify)
+}
+
+func (t *Turn) AppendAcceptanceCheck(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	t.acceptanceChecks = append(t.acceptanceChecks, AcceptanceCheckItem{
+		Text:   text,
+		Status: StatusPending,
+	})
+}
+
+func (t *Turn) UpdateAcceptanceCheck(index int, met bool, evidence string) {
+	if index < 0 || index >= len(t.acceptanceChecks) {
+		return
+	}
+	evidence = strings.TrimSpace(evidence)
+	if isSkippedEvidence(evidence) {
+		t.acceptanceChecks[index].Status = StatusSkipped
+	} else if met {
+		t.acceptanceChecks[index].Status = StatusSuccess
+	} else {
+		t.acceptanceChecks[index].Status = StatusFailed
+	}
+	t.acceptanceChecks[index].Evidence = evidence
+}
+
+func isSkippedEvidence(evidence string) bool {
+	lower := strings.ToLower(evidence)
+	return strings.Contains(lower, "skipped") ||
+		strings.Contains(lower, "n/a") ||
+		strings.Contains(evidence, "不适用")
+}
+
+func (t *Turn) FinishAcceptanceChecklist(passed, total int, allMet bool) {
+	summary := "verification"
+	if total > 0 {
+		summary = fmt.Sprintf("%d/%d criteria", passed, total)
+	}
+	if allMet {
+		t.CompleteStep(StepVerify, summary)
+	} else {
+		t.FailStep(StepVerify, summary)
+	}
 }
 
 func NewTurn(id int, input string) *Turn {
@@ -265,6 +354,7 @@ func (t *Turn) AppendLLM(text string) {
 	}
 	t.llmOutput.WriteString(text)
 	t.streaming = true
+	t.ThinkExpanded = true
 }
 
 func (t *Turn) FlushLLM(text string) {
@@ -374,7 +464,11 @@ func (t *Turn) UpdateTaskStatus(id string, status ItemStatus, result string) {
 }
 
 func (t *Turn) SetPlanSummary(s string) { t.planSummary = s }
-func (t *Turn) SetActive(v bool)        { t.active = v }
+func (t *Turn) SetActive(v bool) { t.active = v }
+
+func (t *Turn) SetActivityDetail(detail string) {
+	t.activityDetail = strings.TrimSpace(detail)
+}
 func (t *Turn) IsActive() bool          { return t.active }
 func (t *Turn) SetChatMode(v bool) { t.chatMode = v }
 func (t *Turn) IsChatMode() bool   { return t.chatMode }
@@ -404,6 +498,34 @@ func (t *Turn) SetCommandOutput(text string) {
 	}
 	t.FlushReply("")
 	t.MarkDone()
+}
+
+func (t *Turn) AddStatusBlock(block string) {
+	block = strings.TrimSpace(block)
+	if block == "" {
+		return
+	}
+	for _, line := range strings.Split(block, "\n") {
+		t.AddStatusLine(line)
+	}
+}
+
+// ShowAcceptanceReport prints the full verification analysis (always visible, not collapsed).
+func (t *Turn) ShowAcceptanceReport(detail string, allMet bool, passed, total int) {
+	if detail == "" {
+		return
+	}
+	t.StartStep(StepVerify)
+	t.AddStatusBlock(detail)
+	summary := "verification"
+	if total > 0 {
+		summary = fmt.Sprintf("%d/%d criteria", passed, total)
+	}
+	if allMet {
+		t.CompleteStep(StepVerify, summary)
+	} else {
+		t.FailStep(StepVerify, summary+" — see report above")
+	}
 }
 
 func (t *Turn) AddStatusLine(line string) {
@@ -439,9 +561,35 @@ func (t *Turn) finishContentSegment(b *strings.Builder) {
 }
 
 func (t *Turn) SetCompletion(summary, projectDir string) {
+	t.SetCompletionAcceptance(summary, projectDir, "", true, 0, 0)
+}
+
+func (t *Turn) SetCompletionAcceptance(summary, projectDir, acceptanceDetail string, passed bool, passedN, totalN int) {
 	t.projectDir = projectDir
-	t.completionMsg = summary
+	t.acceptanceDetail = strings.TrimSpace(acceptanceDetail)
+	t.acceptancePassed = passed
+	t.acceptancePassedN = passedN
+	t.acceptanceTotalN = totalN
+	t.AcceptanceExpanded = false
 	t.TasksExpanded = false
+	if t.acceptanceDetail != "" {
+		t.completionMsg = strings.TrimSpace(summary)
+	} else {
+		t.completionMsg = summary
+	}
+}
+
+func (t *Turn) ToggleAcceptanceExpanded() {
+	if strings.TrimSpace(t.acceptanceDetail) == "" {
+		return
+	}
+	t.AcceptanceExpanded = !t.AcceptanceExpanded
+}
+
+func (t *Turn) AcceptanceDetailText() string { return t.acceptanceDetail }
+
+func (t *Turn) HasAcceptanceChecklist() bool {
+	return len(t.acceptanceChecks) > 0 && !t.HasCompletion()
 }
 
 func (t *Turn) ToggleTasksExpanded() {
@@ -516,6 +664,21 @@ func (t *Turn) MarkCancelled() {
 	t.active = false
 }
 
+// normalizeActivityLabel ensures task execution activity reads as Working, not bare "Calling model".
+func normalizeActivityLabel(detail string) string {
+	d := strings.TrimSpace(detail)
+	if d == "" {
+		return "Working"
+	}
+	if strings.HasPrefix(d, "Working") || strings.HasPrefix(d, "Waiting") || strings.HasPrefix(d, "Thinking") {
+		return d
+	}
+	if strings.Contains(strings.ToLower(d), "calling model") {
+		return "Working · " + d
+	}
+	return d
+}
+
 // WorkingLabel returns a Cursor-style status line for the working indicator.
 func (t *Turn) WorkingLabel(agentState string) string {
 	if t == nil {
@@ -524,19 +687,33 @@ func (t *Turn) WorkingLabel(agentState string) string {
 	switch agentState {
 	case "WaitingApproval":
 		return "Waiting for approval"
+	case "Verifying":
+		if t.activityDetail != "" {
+			return normalizeActivityLabel(t.activityDetail)
+		}
+		return "Working · verifying acceptance…"
 	case "Thinking":
-		return "Thinking"
-	case "Executing":
+		if t.activityDetail != "" {
+			return normalizeActivityLabel(t.activityDetail)
+		}
+		if t.streaming {
+			return "Thinking · streaming…"
+		}
+		return "Thinking · waiting for model…"
+	case "Executing", "Working":
+		if t.activityDetail != "" {
+			return normalizeActivityLabel(t.activityDetail)
+		}
 		for i := len(t.ToolCalls) - 1; i >= 0; i-- {
 			tc := t.ToolCalls[i]
 			if tc.Status == StatusRunning {
 				if tc.Args != "" {
-					return fmt.Sprintf("Running %s %s", tc.Name, truncateStr(tc.Args, 48))
+					return fmt.Sprintf("Working · %s %s", tc.Name, truncateStr(tc.Args, 48))
 				}
-				return "Running " + tc.Name
+				return "Working · " + tc.Name
 			}
 		}
-		return "Executing"
+		return "Working"
 	}
 	if t.currentStep != 0 {
 		return t.currentStep.Label()
@@ -566,7 +743,8 @@ type TurnList struct {
 	width          int
 	pinnedToBottom bool // true = follow latest output
 	firstVisible   int  // top line index when pinnedToBottom is false
-	omitTasksFrom  *Turn // set during View; hide duplicate task box in scroll body
+	omitTasksFrom      *Turn // set during View; hide duplicate task box in scroll body
+	omitAcceptanceFrom *Turn
 }
 
 func NewTurnList(maxTurns int) *TurnList {
@@ -677,9 +855,18 @@ func (tl *TurnList) buildAllLines() []string {
 			allLines = append(allLines, "", "")
 		}
 		skipTasks := tl.omitTasksFrom != nil && t == tl.omitTasksFrom
-		allLines = append(allLines, t.render(tl.width, skipTasks)...)
+		skipAcceptance := tl.omitAcceptanceFrom != nil && t == tl.omitAcceptanceFrom
+		allLines = append(allLines, t.render(tl.width, skipTasks, skipAcceptance)...)
 	}
 	return allLines
+}
+
+// AcceptancePanelLines renders the sticky acceptance checklist during verify.
+func AcceptancePanelLines(t *Turn, width int) []string {
+	if t == nil || len(t.acceptanceChecks) == 0 || t.HasCompletion() {
+		return nil
+	}
+	return t.renderAcceptanceChecklist(width)
 }
 
 // TaskPanelLines renders the sticky To-dos panel for a turn.
@@ -699,8 +886,14 @@ func (tl *TurnList) View(viewportHeight int, pinTasksTurn *Turn) string {
 	}
 	prev := tl.omitTasksFrom
 	tl.omitTasksFrom = pinTasksTurn
+	if pinTasksTurn != nil && len(pinTasksTurn.acceptanceChecks) > 0 && !pinTasksTurn.HasCompletion() {
+		tl.omitAcceptanceFrom = pinTasksTurn
+	} else {
+		tl.omitAcceptanceFrom = nil
+	}
 	allLines := tl.buildAllLines()
 	tl.omitTasksFrom = prev
+	tl.omitAcceptanceFrom = nil
 
 	if len(allLines) == 0 {
 		return ""
@@ -774,9 +967,9 @@ var (
 	turnThinkLabel   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 )
 
-const thinkPreviewLines = 0 // collapsed = header only (one line)
+const thinkPreviewLines = 2 // collapsed shows first N lines + expand hint
 
-func (t *Turn) render(width int, skipTasks bool) []string {
+func (t *Turn) render(width int, skipTasks bool, skipAcceptance bool) []string {
 	if width < 40 {
 		width = 80
 	}
@@ -799,6 +992,10 @@ func (t *Turn) render(width int, skipTasks bool) []string {
 			}
 			lines = append(lines, "")
 		}
+	}
+
+	if !skipAcceptance && len(t.acceptanceChecks) > 0 && !t.HasCompletion() {
+		lines = append(lines, t.renderAcceptanceChecklist(cw)...)
 	}
 
 	if !skipTasks && len(t.Tasks) > 0 && !t.HasCompletion() {
@@ -933,6 +1130,32 @@ func (t *Turn) renderThinking(cw int) []string {
 			}
 			if lineCount > preview {
 				lines = append(lines, turnThinkLabel.Render(fmt.Sprintf("    … %d more lines", lineCount-preview)))
+			}
+		}
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func (t *Turn) renderAcceptanceChecklist(cw int) []string {
+	var lines []string
+	lines = append(lines, turnStepRunStyle.Render("  Acceptance criteria:"))
+	for _, ac := range t.acceptanceChecks {
+		icon, style := todoStatusIcon(ac.Status)
+		if ac.Status == StatusSkipped {
+			style = turnPendingStyle
+		}
+		label := fmt.Sprintf("  %s %s", icon, ac.Text)
+		for _, wl := range wrapLine(label, cw) {
+			lines = append(lines, style.Render(wl))
+		}
+		if ac.Evidence != "" && ac.Status != StatusPending {
+			prefix := "→ "
+			if ac.Status == StatusSkipped {
+				prefix = "skip: "
+			}
+			for _, wl := range wrapLine("      "+prefix+ac.Evidence, cw) {
+				lines = append(lines, turnStepStyle.Render(wl))
 			}
 		}
 	}

@@ -158,6 +158,8 @@ func todoStatusIcon(status ItemStatus) (string, lipgloss.Style) {
 		return "◌", todoIconRun
 	case StatusBlocked:
 		return "⊘", todoIconPending
+	case StatusSkipped:
+		return "−", todoIconPending
 	default:
 		return "○", todoIconPending
 	}

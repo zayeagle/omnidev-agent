@@ -61,7 +61,7 @@ func StatusColor(state string) lipgloss.Style {
 		return StatusIdle
 	case "Thinking":
 		return StatusThinking
-	case "Executing":
+	case "Executing", "Working":
 		return StatusExecuting
 	case "WaitingApproval":
 		return StatusWaitingApproval

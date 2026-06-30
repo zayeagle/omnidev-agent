@@ -97,10 +97,11 @@ func needsMoreReview(instruction string, sess *session.Session) bool {
 		return false
 	}
 	reads, lists, _ := countExplorationTools(sess.EntriesCopy())
+	uniquePaths := countUniqueReadPaths(sess.EntriesCopy())
 	if lists == 0 {
 		return true
 	}
-	if reads < 4 {
+	if uniquePaths < 4 && reads < 6 {
 		return true
 	}
 	return false
@@ -155,7 +156,14 @@ func extractConclusionFromSession(sess *session.Session, results []TaskResult) s
 }
 
 // BuildFinalConclusion produces the user-facing completion text shown above the project path.
-func (a *Agent) BuildFinalConclusion(ctx context.Context, results []TaskResult) string {
+func (a *Agent) BuildFinalConclusion(ctx context.Context, results []TaskResult, criteria []CriterionStatus) string {
+	if a.acceptanceStrict && len(criteria) > 0 && allCriteriaMet(criteria) {
+		// Detailed acceptance report is shown in the collapsible TUI panel, not duplicated here.
+		if extracted := extractConclusionFromSession(a.session, results); hasSubstantialConclusionText(extracted) {
+			return trimConclusion(extracted)
+		}
+		return ""
+	}
 	instruction := latestUserInstruction(a.session)
 	if extracted := extractConclusionFromSession(a.session, results); hasSubstantialConclusionText(extracted) {
 		return trimConclusion(extracted)
@@ -168,6 +176,23 @@ func (a *Agent) BuildFinalConclusion(ctx context.Context, results []TaskResult) 
 		return fallbackConclusion(instruction, results)
 	}
 	return trimConclusion(synthesized)
+}
+
+func formatConclusionFromCriteria(statuses []CriterionStatus) string {
+	var b strings.Builder
+	for _, s := range statuses {
+		mark := "[x]"
+		if !s.Met {
+			mark = "[ ]"
+		}
+		b.WriteString(fmt.Sprintf("%s %s", mark, s.Text))
+		if s.Evidence != "" {
+			b.WriteString(" — ")
+			b.WriteString(s.Evidence)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (a *Agent) synthesizeConclusion(ctx context.Context, instruction string, results []TaskResult) (string, error) {

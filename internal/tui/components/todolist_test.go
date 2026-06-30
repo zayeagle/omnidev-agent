@@ -7,7 +7,7 @@ func TestRenderTodoListBlockedAndDepends(t *testing.T) {
 		{ID: "1", Description: "Setup", Status: StatusSuccess},
 		{ID: "2", Description: "Build UI", Status: StatusBlocked, DependsOn: []string{"1"}},
 	}
-	lines := RenderTodoList(tasks, 80, false, "Executing")
+	lines := RenderTodoList(tasks, 80, false, "Working")
 	body := joinLines(lines)
 	if !containsSubstring(body, "waits on") {
 		t.Fatalf("expected dependency hint, got %q", body)

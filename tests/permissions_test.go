@@ -43,6 +43,8 @@ func TestDangerousToolApprovalFlow(t *testing.T) {
 	sess := session.New()
 
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
+	a.SetSubAgent(true)
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -118,6 +120,8 @@ func TestDangerousToolDenyFlow(t *testing.T) {
 	sess := session.New()
 
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
+	a.SetSubAgent(true)
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -198,6 +202,8 @@ func TestSafeToolNoApproval(t *testing.T) {
 	sess := session.New()
 
 	a := agent.New(mock, permChecker, toolbox, sess)
+	a.SetAcceptanceStrict(false)
+	a.SetSubAgent(true)
 
 	msgCh := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

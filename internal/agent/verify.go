@@ -20,44 +20,7 @@ const maxVerifyFixAttempts = 5
 
 // VerifyProjectWorkspace runs non-interactive build checks in the output directory.
 // Returns a human-readable summary and whether all checks passed.
-func VerifyProjectWorkspace(ctx context.Context, dir string) (summary string, ok bool) {
-	dir = strings.TrimSpace(dir)
-	if dir == "" {
-		return "", true
-	}
-	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
-		return "", true
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
-	defer cancel()
-
-	var lines []string
-	allOK := true
-
-	if out, err := runVerifyCommand(ctx, dir, goBuildArgs()); err != nil {
-		allOK = false
-		lines = append(lines, "Build check failed:")
-		lines = append(lines, indentOutput(out, err))
-	} else {
-		lines = append(lines, "Build check passed (go build ./...).")
-	}
-
-	if hasGoTests(dir) {
-		if out, err := runVerifyCommand(ctx, dir, []string{"test", "./..."}); err != nil {
-			allOK = false
-			lines = append(lines, "Test check failed:")
-			lines = append(lines, indentOutput(out, err))
-		} else {
-			lines = append(lines, "Tests passed (go test ./...).")
-		}
-	}
-
-	if len(lines) == 0 {
-		return "", true
-	}
-	return strings.Join(lines, "\n"), allOK
-}
+// Implementation: verify_workspace.go (Go / Node / Python / fallback).
 
 func goBuildArgs() []string {
 	return []string{"build", "./..."}
@@ -130,7 +93,8 @@ func (a *Agent) runVerifyFixUntilPass(ctx context.Context, msgCh chan<- tea.Msg,
 	}
 
 	for attempt := 1; attempt <= maxVerifyFixAttempts; attempt++ {
-		summary, passed := VerifyProjectWorkspace(ctx, projectDir)
+		wr := VerifyProjectWorkspaceDetailed(ctx, projectDir)
+		summary, passed := wr.Summary, wr.OK
 		if summary != "" {
 			msgCh <- StreamChunkMsg{
 				Content: fmt.Sprintf("Verification (attempt %d/%d):\n%s", attempt, maxVerifyFixAttempts, summary),
@@ -145,7 +109,9 @@ func (a *Agent) runVerifyFixUntilPass(ctx context.Context, msgCh chan<- tea.Msg,
 			break
 		}
 
-		a.session.AddWithState("system", defaultVerifyFixPrompt+"\n\n"+summary, StateThinking.String(), 0)
+		diagnosis := diagnoseMechanicalVerify(projectDir, wr.BuildOK, wr.TestOK, wr.TestsRan, summary)
+		prompt := formatVerifyFixPrompt(diagnosis, projectDir, summary)
+		a.session.AddWithState("system", prompt, StateThinking.String(), 0)
 		msgCh <- StreamChunkMsg{Content: "Verification failed — analyzing and fixing issues…", Done: true}
 
 		if err := a.agentLoop(ctx, msgCh, true); err != nil {

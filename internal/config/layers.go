@@ -190,6 +190,9 @@ func mergeEnv(dst *Config) {
 			dst.LLMRetryBackoffSec = secs
 		}
 	}
+	if v := os.Getenv("OMNIDEV_LLM_PERSIST_NETWORK_RETRY"); v != "" {
+		dst.LLMPersistNetworkRetry = boolPtr(strings.EqualFold(v, "true") || v == "1")
+	}
 	if v := os.Getenv("OMNIDEV_MAX_CONSECUTIVE_TOOL_DENIALS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			dst.MaxConsecutiveToolDenials = n
@@ -241,6 +244,9 @@ func mergeEnv(dst *Config) {
 	}
 	if v := os.Getenv("OMNIDEV_PIPELINE_USE_LLM_COMPLEXITY"); v != "" {
 		dst.PipelineUseLLMComplexity = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("OMNIDEV_PIPELINE_USE_LLM_ACCEPTANCE"); v != "" {
+		dst.PipelineUseLLMAcceptance = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := os.Getenv("OMNIDEV_PIPELINE_PLAN_MODE"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 2 {
@@ -314,6 +320,10 @@ func applyNonZero(dst, src *Config) {
 	if len(src.LLMRetryBackoffSec) > 0 {
 		dst.LLMRetryBackoffSec = append([]int(nil), src.LLMRetryBackoffSec...)
 	}
+	if src.LLMPersistNetworkRetry != nil {
+		v := *src.LLMPersistNetworkRetry
+		dst.LLMPersistNetworkRetry = &v
+	}
 	if src.MaxConsecutiveToolDenials > 0 {
 		dst.MaxConsecutiveToolDenials = src.MaxConsecutiveToolDenials
 	}
@@ -350,6 +360,9 @@ func applyNonZero(dst, src *Config) {
 	if src.PipelineUseLLMComplexity {
 		dst.PipelineUseLLMComplexity = true
 	}
+	if src.PipelineUseLLMAcceptance {
+		dst.PipelineUseLLMAcceptance = true
+	}
 	if src.PipelinePlanMode > 0 {
 		dst.PipelinePlanMode = src.PipelinePlanMode
 	}
@@ -379,4 +392,8 @@ func MustMatchProvider(p string) string {
 		// Unknown names use OpenAI-compatible client with custom base_url.
 		return "openai"
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

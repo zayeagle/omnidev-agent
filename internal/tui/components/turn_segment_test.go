@@ -38,7 +38,7 @@ func TestTurnContentGapAfterStatus(t *testing.T) {
 func TestTurnCommandOutputNotInThinking(t *testing.T) {
 	tn := NewTurn(1, "/sessions")
 	tn.SetCommandOutput("Recent sessions (newest first):\n\n  1. 2026-01-01 12:00  ·  3 msgs  ·  1 tools\n     › hello")
-	body := joinLines(tn.render(80, false))
+	body := joinLines(tn.render(80, false, false))
 	if strings.Contains(body, "Thinking") {
 		t.Fatalf("command output should not render as Thinking:\n%s", body)
 	}

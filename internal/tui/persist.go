@@ -80,6 +80,37 @@ func restoreUI(turns *components.TurnList, ui *session.PersistedUI) int {
 	return maxID
 }
 
+func isAgentPromptInput(input string) bool {
+	input = strings.TrimSpace(input)
+	if input == "" || input == "quit" || input == "exit" {
+		return false
+	}
+	return !isSessionSlashCommand(input)
+}
+
+func promptHistoryFromTurns(turns *components.TurnList) []string {
+	if turns == nil {
+		return nil
+	}
+	var out []string
+	for _, t := range turns.AllTurns() {
+		if t == nil {
+			continue
+		}
+		if isAgentPromptInput(t.UserInput) {
+			out = append(out, strings.TrimSpace(t.UserInput))
+		}
+	}
+	return out
+}
+
+func restoreInputHistory(input *components.InputLine, turns *components.TurnList) {
+	if input == nil {
+		return
+	}
+	input.LoadHistory(promptHistoryFromTurns(turns))
+}
+
 func hydrateTurnsFromEntries(turns *components.TurnList, entries []session.Entry) int {
 	if turns == nil || len(entries) == 0 {
 		return 0

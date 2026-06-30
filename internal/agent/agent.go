@@ -9,6 +9,7 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 	"github.com/zayeagle/omnidev-agent/internal/mcp"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
+	"github.com/zayeagle/omnidev-agent/internal/runlog"
 	"github.com/zayeagle/omnidev-agent/internal/session"
 	"github.com/zayeagle/omnidev-agent/internal/skills"
 	"github.com/zayeagle/omnidev-agent/internal/stream"
@@ -24,6 +25,7 @@ const (
 	StateWaitingApproval State = 3
 	StateDone            State = 4
 	StateError           State = 5
+	StateVerifying       State = 6
 )
 
 func (s State) String() string {
@@ -33,13 +35,15 @@ func (s State) String() string {
 	case StateThinking:
 		return "Thinking"
 	case StateExecuting:
-		return "Executing"
+		return "Working"
 	case StateWaitingApproval:
 		return "WaitingApproval"
 	case StateDone:
 		return "Done"
 	case StateError:
 		return "Error"
+	case StateVerifying:
+		return "Working"
 	default:
 		return "Unknown"
 	}
@@ -71,6 +75,11 @@ type Agent struct {
 	contextSlim          ContextSlimOptions
 	skillCatalog         *skills.Catalog
 	mcpManager           *mcp.Manager
+	acceptancePlan       *AcceptancePlan
+	acceptanceStrict     bool
+	readCache            *sessionReadCache
+	runLog               *runlog.Logger
+	pendingMech          mechanicalVerifyResult
 }
 
 func New(provider llm.Provider, permChecker *permissions.Checker, toolbox *tools.Registry, sess *session.Session) *Agent {
@@ -85,6 +94,8 @@ func New(provider llm.Provider, permChecker *permissions.Checker, toolbox *tools
 		maxConsecutiveDenials: 3,
 		pipelineOpts:          DefaultPipelineOptions(),
 		contextSlim:           DefaultContextSlimOptions(),
+		acceptanceStrict:      true,
+		readCache:             newSessionReadCache(),
 	}
 }
 
@@ -101,6 +112,11 @@ func (a *Agent) SetSession(sess *session.Session) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.session = sess
+	if a.readCache != nil {
+		a.readCache.Reset()
+	} else {
+		a.readCache = newSessionReadCache()
+	}
 }
 func (a *Agent) SetSubAgent(v bool)                     { a.subAgent = v }
 func (a *Agent) SetActiveSubtaskID(id string)           { a.activeSubtaskID = id }
@@ -118,6 +134,21 @@ func (a *Agent) SetSkillCatalog(c *skills.Catalog)         { a.skillCatalog = c 
 func (a *Agent) SkillCatalog() *skills.Catalog             { return a.skillCatalog }
 func (a *Agent) SetMCPManager(m *mcp.Manager)              { a.mcpManager = m }
 func (a *Agent) MCPManager() *mcp.Manager                  { return a.mcpManager }
+
+func (a *Agent) SetRunLog(l *runlog.Logger) { a.runLog = l }
+
+func (a *Agent) RunLogPath() string {
+	if a.runLog == nil {
+		return ""
+	}
+	return a.runLog.Path()
+}
+
+func (a *Agent) logRun(category, format string, args ...interface{}) {
+	if a.runLog != nil {
+		a.runLog.Line(category, format, args...)
+	}
+}
 
 func (a *Agent) flushTurnLog(startIdx int) {
 	if a.turnLogStore == nil || a.subAgent {
@@ -154,11 +185,26 @@ func (a *Agent) setState(s State) {
 }
 
 func (a *Agent) buildMessages() []llm.Message {
+	entries := a.session.EntriesCopy()
+	minKeep := a.contextSlim.MinKeepEntries
+	if minKeep <= 0 {
+		minKeep = defaultContextMinKeep
+	}
+	if a.ctxMgr != nil && len(entries) > minKeep && a.ctxMgr.ShouldSummarize(entries) {
+		compacted, err := a.ctxMgr.Compact(entries, minKeep)
+		if err == nil && len(compacted) > 0 && len(compacted) < len(entries) {
+			entries = compacted
+			a.session.ReplaceEntries(compacted)
+		}
+	}
+
 	sys := "You are a helpful coding assistant. You have access to tools. Use them when needed. Always respond in English."
-	sys += "\n\nVerification: When checking your work, use `go build ./...` and `go test ./...` only. " +
+	sys += codeExplorationGuidance
+	sys += "\n\nVerification: When checking your work, use `go build ./...` first. " +
+		"Run `go test ./...` only when the user asked for tests or when fixing existing test failures. " +
 		"Never run long-lived processes (`go run`, dev servers, background servers) — they block the agent and are rejected. " +
 		"If build or tests fail, analyze errors, fix code, and install dependencies with shell_exec (go mod tidy, npm install, etc.; may require approval). " +
-		"A final verify step runs automatically until build/tests pass."
+		"A final verify step runs automatically until build (and tests when requested) pass."
 	if a.outputDir != "" {
 		sys += fmt.Sprintf("\n\nIMPORTANT: All generated code MUST be written under the directory: %s\nUse paths relative to that directory (e.g. main.go). NEVER create new project files in the repository root, internal/, cmd/, or tests/.", displayOutputDir(a.outputDir))
 		if a.projectLayout != "" {
@@ -174,21 +220,11 @@ func (a *Agent) buildMessages() []llm.Message {
 	if addendum := reviewSystemAddendum(latestUserInstruction(a.session)); addendum != "" {
 		sys += addendum
 	}
+	if addendum := exploredFilesAddendum(entries); addendum != "" {
+		sys += addendum
+	}
 	msgs := []llm.Message{
 		llm.NewMessage("system", sys),
-	}
-
-	minKeep := a.contextSlim.MinKeepEntries
-	if minKeep <= 0 {
-		minKeep = defaultContextMinKeep
-	}
-	entries := a.session.EntriesCopy()
-	if a.ctxMgr != nil && len(entries) > minKeep && a.ctxMgr.ShouldSummarize(entries) {
-		compacted, err := a.ctxMgr.Compact(entries, minKeep)
-		if err == nil && len(compacted) > 0 && len(compacted) < len(entries) {
-			entries = compacted
-			a.session.ReplaceEntries(compacted)
-		}
 	}
 
 	keepFull := a.contextSlim.ToolResultsKeepFull

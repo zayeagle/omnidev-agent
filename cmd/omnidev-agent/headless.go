@@ -83,6 +83,29 @@ func runHeadless(ctx context.Context, a *agent.Agent, sess *session.Session, sto
 		case agent.ResolveConflictMsg:
 			fmt.Printf("\n⚠ Checkpoint conflict: phase=%s hasInProgress=%v\n", m.LastPhase, m.HasInProgress)
 
+		case agent.VerificationProgressMsg:
+			fmt.Printf("\n%s\n", m.Detail)
+			if m.Detail == "" {
+				fmt.Printf("Acceptance: %d/%d criteria\n", m.Passed, m.Total)
+				for _, c := range m.Criteria {
+					mark := "FAIL"
+					if c.Met {
+						mark = "PASS"
+					}
+					fmt.Printf("  [%s] %s", mark, c.Text)
+					if c.Evidence != "" {
+						fmt.Printf(" — %s", c.Evidence)
+					}
+					fmt.Println()
+				}
+			}
+
+		case agent.PartialCompleteMsg:
+			if len(m.Criteria) > 0 {
+				fmt.Println(formatHeadlessAcceptanceDetail(m.Criteria))
+			}
+			fmt.Fprintf(os.Stderr, "\n⚠ %s\n", m.Summary)
+
 		case agent.DoneMsg:
 			fmt.Println("\n── Session complete ──")
 		}
@@ -101,4 +124,20 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-3] + "..."
+}
+
+func formatHeadlessAcceptanceDetail(criteria []agent.CriterionStatus) string {
+	var b strings.Builder
+	b.WriteString("── Acceptance failure detail ──\n")
+	for _, c := range criteria {
+		mark := "FAIL"
+		if c.Met {
+			mark = "PASS"
+		}
+		b.WriteString(fmt.Sprintf("[%s] %s\n", mark, c.Text))
+		if ev := strings.TrimSpace(c.Evidence); ev != "" {
+			b.WriteString(fmt.Sprintf("      reason: %s\n", ev))
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

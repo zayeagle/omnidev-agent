@@ -89,6 +89,7 @@ func (m *model) handleSlashCommand(input string) {
 		if !m.isWorking() {
 			m.turns = components.NewTurnList(50)
 			m.turnCount = 0
+			m.input = components.NewInputLine()
 		}
 	case "/archive":
 		if !m.isWorking() {

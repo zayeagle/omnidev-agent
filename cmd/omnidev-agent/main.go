@@ -15,6 +15,7 @@ import (
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 	"github.com/zayeagle/omnidev-agent/internal/mcp"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
+	"github.com/zayeagle/omnidev-agent/internal/runlog"
 	"github.com/zayeagle/omnidev-agent/internal/session"
 	"github.com/zayeagle/omnidev-agent/internal/skills"
 	"github.com/zayeagle/omnidev-agent/internal/tools"
@@ -83,6 +84,13 @@ func main() {
 	cpStore := agent.NewCheckpointStore(".ai_history/checkpoints/")
 
 	a := agent.New(provider, permChecker, toolbox, sess)
+	if runLog, err := runlog.NewInExecutableDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "run log: %v\n", err)
+	} else {
+		a.SetRunLog(runLog)
+		fmt.Fprintf(os.Stderr, "Run log: %s\n", runLog.Path())
+		defer func() { _ = runLog.Close() }()
+	}
 	a.SetMaxTurns(cfg.MaxTurns)
 	retryCfg := cfg.LLMRetryConfig()
 	a.SetRetryConfig(retryCfg)
