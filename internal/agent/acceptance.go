@@ -249,8 +249,9 @@ func (a *Agent) persistAcceptanceCheckpoint(plan AcceptancePlan, statuses []Crit
 	}
 	cp, err := a.cpStore.Load()
 	if err != nil || cp == nil {
-		cp = &Checkpoint{Instruction: latestUserInstruction(a.session)}
+		return // never create an acceptance-only checkpoint without sub-tasks
 	}
+	a.mergeCheckpointTasks(cp)
 	if len(plan.Criteria) > 0 {
 		cp.AcceptancePlan = plan
 	}
@@ -258,6 +259,7 @@ func (a *Agent) persistAcceptanceCheckpoint(plan AcceptancePlan, statuses []Crit
 	cp.ExitGateNudges = nudges
 	cp.AcceptanceIncomplete = len(statuses) > 0 && !allCriteriaMet(statuses)
 	_ = a.cpStore.Save(cp)
+	a.rememberCheckpoint(cp)
 }
 
 func (a *Agent) restoreAcceptanceFromCheckpoint() int {
@@ -862,7 +864,8 @@ func auditSubTaskResults(results []TaskResult) bool {
 			return false
 		}
 	}
-	return len(results) > 0
+	// No recorded sub-task failures (empty results = no parallel dispatch, not a failure).
+	return true
 }
 
 func attachTaskContracts(tasks []Task) []Task {

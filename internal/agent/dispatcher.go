@@ -77,7 +77,7 @@ func DefaultDispatcherOptions() DispatcherOptions {
 	return DispatcherOptions{
 		MaxParallel:        4,
 		SubAgentTimeout:    180 * time.Second,
-		SubAgentMaxTurns:   15,
+		SubAgentMaxTurns:   50,
 		SubAgentMaxRetries: 0,
 	}
 }
@@ -90,8 +90,8 @@ func NewTaskDispatcher(agent *Agent, opts DispatcherOptions) *TaskDispatcher {
 	if opts.SubAgentTimeout <= 0 {
 		opts.SubAgentTimeout = DefaultDispatcherOptions().SubAgentTimeout
 	}
-	if opts.SubAgentMaxTurns < 1 {
-		opts.SubAgentMaxTurns = DefaultDispatcherOptions().SubAgentMaxTurns
+	if opts.SubAgentMaxTurns < 0 {
+		opts.SubAgentMaxTurns = 0 // unlimited
 	}
 	return &TaskDispatcher{
 		agent:              agent,
@@ -113,6 +113,39 @@ func (d *TaskDispatcher) SetCheckpointStore(cs *CheckpointStore) {
 func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh chan<- tea.Msg) (DispatchOutcome, error) {
 	// Check for existing checkpoint (resume scenario)
 	cp, _ := d.checkpointLoad()
+	if cp != nil {
+		d.agent.mergeCheckpointTasks(cp)
+		if len(cp.Tasks) > 0 {
+			d.checkpointSave(cp)
+		}
+	}
+	if cp != nil && cp.Phase != CheckpointDone && cp.Interrupted {
+		mode := d.agent.consumeFollowUpMode()
+		if mode == FollowUpUnknown {
+			mode = FollowUpContinue
+		}
+		cp.Interrupted = false
+		d.checkpointSave(cp)
+		if len(cp.Tasks) > 0 {
+			instr := cp.Instruction
+			if strings.TrimSpace(instr) == "" {
+				instr = instruction
+			}
+			switch mode {
+			case FollowUpContinue:
+				msgCh <- StreamChunkMsg{
+					Content: fmt.Sprintf("Resuming interrupted session — %d/%d tasks completed.",
+						len(cp.Results), len(cp.Tasks)),
+					Done: true,
+				}
+				return d.dispatchWithCheckpoint(ctx, instr, cp, msgCh)
+			case FollowUpReplanLight, FollowUpReplanFull:
+				return d.dispatchWithReplan(ctx, instr, cp, mode, msgCh)
+			}
+		}
+		d.checkpointClear()
+		cp = nil
+	}
 	if cp != nil && cp.Phase != CheckpointDone {
 		reply := make(chan CheckpointResponse, 1)
 		msgCh <- CheckpointPromptMsg{
@@ -130,8 +163,13 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 			return OutcomeNotHandled, ctx.Err()
 		}
 		if resume {
-			msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(cp.Tasks)}
-			return d.dispatchWithCheckpoint(ctx, instruction, cp, msgCh)
+			if len(cp.Tasks) > 0 {
+				return d.dispatchWithCheckpoint(ctx, instruction, cp, msgCh)
+			}
+			msgCh <- StreamChunkMsg{
+				Content: "Checkpoint has no tasks — starting fresh decomposition.",
+				Done:    true,
+			}
 		}
 		d.checkpointClear()
 	}
@@ -229,6 +267,33 @@ func (d *TaskDispatcher) Dispatch(ctx context.Context, instruction string, msgCh
 // Plan decomposes an instruction into sub-tasks using the LLM (default).
 // Mode 0/1: LLM decides whether to return one task or many. Mode 2: skip LLM, single task.
 func (d *TaskDispatcher) Plan(ctx context.Context, instruction string) ([]Task, error) {
+	return d.planTasks(ctx, instruction, "")
+}
+
+func (d *TaskDispatcher) planAfterInterrupt(ctx context.Context, instruction string, cp *Checkpoint, mode FollowUpMode) ([]Task, error) {
+	progress := formatCheckpointProgress(cp)
+	var extra string
+	switch mode {
+	case FollowUpReplanFull:
+		extra = fmt.Sprintf(`
+
+The user interrupted and may have changed direction or asked for a new plan.
+Prior progress (context only — may be obsolete):
+%s
+
+Produce a fresh task breakdown for the FULL merged request below.`, progress)
+	default:
+		extra = fmt.Sprintf(`
+
+The session was interrupted. Progress so far:
+%s
+
+Plan remaining or adjusted work only. Do NOT recreate finished sub-tasks. Use new task IDs for newly added work.`, progress)
+	}
+	return d.planTasks(ctx, instruction, extra)
+}
+
+func (d *TaskDispatcher) planTasks(ctx context.Context, instruction, extraContext string) ([]Task, error) {
 	if d.agent.pipelineOpts.PlanMode == 2 {
 		return ensureVerificationTask([]Task{{ID: "1", Description: instruction}}, instruction), nil
 	}
@@ -252,7 +317,7 @@ Rules:
 - Tasks that can run in parallel must NOT list each other as dependencies
 - Output ONLY valid JSON — an array of objects with id, description, and optional depends_on
 - Keep each description concise (one sentence)
-- Do NOT add a final verification task — one is appended automatically after planning%s
+- Do NOT add a final verification task — one is appended automatically after planning%s%s
 
 Request: %s
 
@@ -260,7 +325,7 @@ Output format (one task example):
 [{"id": "1", "description": "implement X end-to-end"}]
 
 Multi-task example:
-[{"id": "1", "description": "do X"}, {"id": "2", "description": "do Y", "depends_on": ["1"]}]`, layoutHint, instruction)
+[{"id": "1", "description": "do X"}, {"id": "2", "description": "do Y", "depends_on": ["1"]}]`, layoutHint, extraContext, instruction)
 
 	messages := []llm.Message{
 		{Role: "system", Content: "You are a task planner. Output only valid JSON arrays. Prefer a single task unless splitting clearly helps. No markdown, no explanation."},
@@ -284,8 +349,70 @@ Multi-task example:
 	return ensureVerificationTask(tasks, instruction), nil
 }
 
+// dispatchWithReplan runs the planner after interrupt follow-up, preserving completed work when appropriate.
+func (d *TaskDispatcher) dispatchWithReplan(ctx context.Context, instruction string, cp *Checkpoint, mode FollowUpMode, msgCh chan<- tea.Msg) (DispatchOutcome, error) {
+	if len(cp.AcceptancePlan.Criteria) > 0 {
+		d.agent.acceptancePlan = &cp.AcceptancePlan
+	}
+
+	msgCh <- StreamChunkMsg{Content: followUpModeLabel(mode), Done: true}
+
+	tasks, err := d.planAfterInterrupt(ctx, instruction, cp, mode)
+	if err != nil {
+		msgCh <- StreamChunkMsg{
+			Content: fmt.Sprintf("Re-plan failed (%v), resuming previous task list.", err),
+			Done:    true,
+		}
+		return d.dispatchWithCheckpoint(ctx, instruction, cp, msgCh)
+	}
+	tasks = attachTaskContracts(tasks)
+
+	switch mode {
+	case FollowUpReplanFull:
+		cp.Results = nil
+	default:
+		cp.Results = filterResultsForTasks(cp.Results, tasks)
+	}
+	cp.Tasks = tasks
+	cp.Instruction = instruction
+	cp.Phase = CheckpointDecomposed
+	d.checkpointSave(cp)
+
+	msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(tasks)}
+	emitCheckpointTaskStates(cp, msgCh)
+
+	if len(tasks) > 1 {
+		confirmed, err := d.waitForPlanConfirm(ctx, msgCh, len(tasks))
+		if err != nil {
+			return OutcomeNotHandled, err
+		}
+		if !confirmed {
+			d.checkpointClear()
+			msgCh <- StreamChunkMsg{Content: "Task plan cancelled.", Done: true}
+			return OutcomeCancelled, nil
+		}
+	}
+
+	cp.Phase = CheckpointExecuting
+	d.checkpointSave(cp)
+
+	if err := d.executeTasksWithCheckpoint(ctx, cp, msgCh); err != nil {
+		return OutcomeNotHandled, err
+	}
+	outcome := d.mergeResults(ctx, instruction, cp, msgCh)
+	if outcome == OutcomeSuccess {
+		d.checkpointClear()
+	}
+	return outcome, nil
+}
+
 // dispatchWithCheckpoint handles resume after a checkpoint is found.
 func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction string, cp *Checkpoint, msgCh chan<- tea.Msg) (DispatchOutcome, error) {
+	if cp == nil || len(cp.Tasks) == 0 {
+		d.checkpointClear()
+		msgCh <- StreamChunkMsg{Content: "Checkpoint has no tasks — starting fresh decomposition.", Done: true}
+		return OutcomeNotHandled, nil
+	}
 	if cp.Phase == CheckpointDone {
 		d.checkpointClear()
 		msgCh <- StreamChunkMsg{Content: "Previous session completed. Starting fresh.", Done: true}
@@ -300,6 +427,9 @@ func (d *TaskDispatcher) dispatchWithCheckpoint(ctx context.Context, instruction
 		gap := formatAcceptanceGaps(cp.CriteriaStatus, true, "")
 		d.agent.session.AddWithState("system", "[ACCEPTANCE RESUME]\n"+exitGateNudgePrefix+"\n\n"+gap, StateVerifying.String(), 0)
 	}
+
+	msgCh <- TaskPlanMsg{Tasks: tasksToPlanItems(cp.Tasks)}
+	emitCheckpointTaskStates(cp, msgCh)
 
 	msgCh <- StreamChunkMsg{
 		Content: fmt.Sprintf("Resuming from checkpoint — %d/%d tasks completed. Remaining: %d",
@@ -403,7 +533,11 @@ func (d *TaskDispatcher) executeTasks(ctx context.Context, allTasks []Task, comp
 }
 
 // scaleSubAgentLimits bumps turns/timeout for heavier sub-tasks.
+// baseTurns <= 0 means unlimited (no cap).
 func scaleSubAgentLimits(task Task, baseTurns int, baseTimeout time.Duration) (int, time.Duration) {
+	if baseTurns <= 0 {
+		return 0, scaleSubAgentTimeout(task, baseTimeout)
+	}
 	turns := baseTurns
 	timeout := baseTimeout
 	if len(task.DependsOn) > 0 || len(task.Description) > 120 {
@@ -414,14 +548,16 @@ func scaleSubAgentLimits(task Task, baseTurns int, baseTimeout time.Duration) (i
 		turns += 5
 		timeout += 60 * time.Second
 	}
-	if turns > 25 {
-		turns = 25
-	}
+	return turns, scaleSubAgentTimeout(task, timeout)
+}
+
+func scaleSubAgentTimeout(task Task, timeout time.Duration) time.Duration {
 	maxTimeout := 5 * time.Minute
 	if timeout > maxTimeout {
-		timeout = maxTimeout
+		return maxTimeout
 	}
-	return turns, timeout
+	_ = task
+	return timeout
 }
 
 // runSubAgent creates a lightweight sub-agent that executes a single task.
@@ -535,8 +671,12 @@ func (d *TaskDispatcher) runSubAgent(ctx context.Context, task Task, msgCh chan<
 // mergeResults injects sub-task results, audits evidence, runs final acceptance, and signals outcome.
 func (d *TaskDispatcher) mergeResults(ctx context.Context, instruction string, cp *Checkpoint, msgCh chan<- tea.Msg) DispatchOutcome {
 	results := cp.Results
+	d.logSubTaskResults(results)
 	var sb strings.Builder
 	sb.WriteString("[SUB-TASK RESULTS]\n")
+	if len(results) == 0 {
+		sb.WriteString("- (no parallel sub-tasks recorded)\n")
+	}
 	for _, r := range results {
 		status := "OK"
 		if !r.Success {
@@ -563,9 +703,29 @@ func (d *TaskDispatcher) mergeResults(ctx context.Context, instruction string, c
 	reason := "could not complete task after autonomous recovery"
 	if !tasksOK {
 		reason = "one or more sub-tasks failed"
+	} else if !accepted || !allCriteriaMet(statuses) {
+		reason = "acceptance criteria not fully met"
 	}
 	d.agent.signalTaskFailed(ctx, msgCh, reason, statuses, results)
 	return OutcomeFailed
+}
+
+func (d *TaskDispatcher) logSubTaskResults(results []TaskResult) {
+	if len(results) == 0 {
+		d.agent.logRun("dispatcher", "sub-task audit: no results recorded")
+		return
+	}
+	for _, r := range results {
+		if r.Success {
+			d.agent.logRun("dispatcher", "sub-task %s OK", r.TaskID)
+		} else {
+			errMsg := r.Error
+			if errMsg == "" {
+				errMsg = "unknown"
+			}
+			d.agent.logRun("dispatcher", "sub-task %s FAILED err=%s", r.TaskID, errMsg)
+		}
+	}
 }
 
 func (d *TaskDispatcher) signalDispatchFailed(ctx context.Context, msgCh chan<- tea.Msg, instruction string, statuses []CriterionStatus, results []TaskResult, reason string) {
@@ -684,6 +844,9 @@ func (d *TaskDispatcher) checkpointSave(cp *Checkpoint) {
 	if d.checkpointStore != nil {
 		d.checkpointStore.Save(cp)
 	}
+	if d.agent != nil {
+		d.agent.rememberCheckpoint(cp)
+	}
 }
 
 func (d *TaskDispatcher) checkpointLoad() (*Checkpoint, error) {
@@ -703,6 +866,9 @@ func (d *TaskDispatcher) checkpointClearUnlessResumable(criteria []CriterionStat
 func (d *TaskDispatcher) checkpointClear() {
 	if d.checkpointStore != nil {
 		d.checkpointStore.Clear()
+	}
+	if d.agent != nil {
+		d.agent.clearCheckpointSnap()
 	}
 }
 

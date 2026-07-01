@@ -46,7 +46,7 @@ func NewMessageList(maxLines int) *MessageList {
 	}
 	ml.Add(agentMsgColor.Render("  Welcome to omnidev-agent"), MsgAgent)
 	ml.Add(agentMsgColor.Render("  Type a natural language command and press Enter."), MsgAgent)
-	ml.Add(helpMsgColor.Render("  Ctrl+C or type 'quit' to exit."), MsgHelp)
+	ml.Add(helpMsgColor.Render("  quit/exit to leave · Ctrl+C interrupt (in session) or exit (idle)"), MsgHelp)
 	ml.Add("", MsgHelp)
 	return ml
 }

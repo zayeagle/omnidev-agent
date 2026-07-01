@@ -80,6 +80,13 @@ type Agent struct {
 	readCache            *sessionReadCache
 	runLog               *runlog.Logger
 	pendingMech          mechanicalVerifyResult
+	loopPhase            LoopPhase
+	acceptanceCycle      int // 1-based during acceptance recovery agentLoop
+	maxAcceptanceCycles  int
+	acceptanceMaxTurns   int
+	autoResumeNext       bool
+	followUpMode         FollowUpMode
+	checkpointSnap       *Checkpoint // latest task plan for interrupt/resume
 }
 
 func New(provider llm.Provider, permChecker *permissions.Checker, toolbox *tools.Registry, sess *session.Session) *Agent {
@@ -96,6 +103,8 @@ func New(provider llm.Provider, permChecker *permissions.Checker, toolbox *tools
 		contextSlim:           DefaultContextSlimOptions(),
 		acceptanceStrict:      true,
 		readCache:             newSessionReadCache(),
+		maxAcceptanceCycles:   defaultMaxAcceptanceCycles,
+		acceptanceMaxTurns:    defaultAcceptanceMaxTurns,
 	}
 }
 

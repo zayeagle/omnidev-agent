@@ -16,7 +16,10 @@ type Config struct {
 	Temperature float64 `json:"temperature"`
 	CompatMode  string  `json:"compat_mode"` // auto | openai | strict
 	Timeout     int     `json:"timeout"`
-	MaxTurns    int     `json:"max_turns"`
+	MaxTurns    int     `json:"max_turns"` // default 20; 0 or -1 = unlimited
+	// Acceptance recovery (separate budget from implement max_turns)
+	MaxAcceptanceRecoveryCycles int `json:"max_acceptance_recovery_cycles"` // default 10
+	AcceptanceMaxTurns            int `json:"acceptance_max_turns"`           // per recovery cycle, default 10
 	LogLevel    string  `json:"log_level"`
 	SessionDir  string  `json:"session_dir"` // omnidev-agent runtime snapshots → .ai_history/sessions/
 	LogDir      string  `json:"log_dir"`     // deprecated alias for session_dir
@@ -26,7 +29,7 @@ type Config struct {
 	// Task dispatcher (parallel sub-agents)
 	MaxParallel           int   `json:"max_parallel"`             // default 4
 	SubAgentTimeout       int   `json:"sub_agent_timeout"`        // seconds, default 120
-	SubAgentMaxTurns      int   `json:"sub_agent_max_turns"`      // default 10
+	SubAgentMaxTurns      int   `json:"sub_agent_max_turns"`      // default 50; 0 or -1 = unlimited
 	SubAgentMaxRetries    int   `json:"sub_agent_max_retries"`    // re-run failed sub-tasks, default 0
 	// LLM request retry (transient API / network errors)
 	LLMMaxRetries              int   `json:"llm_max_retries"`                        // default 3 (4 attempts total) for non-network errors
@@ -87,6 +90,8 @@ func Default() *Config {
 		Model:    "gpt-4",
 		Timeout:  0,
 		MaxTurns: 20,
+		MaxAcceptanceRecoveryCycles: 10,
+		AcceptanceMaxTurns:          10,
 		LogLevel: "info",
 		SessionDir:                 ".ai_history/sessions/",
 		LogDir:                     ".ai_history/sessions/", // legacy alias
@@ -94,7 +99,7 @@ func Default() *Config {
 		ContextSummarizeThreshold:  0.95,
 		MaxParallel:               4,
 		SubAgentTimeout:           180,
-		SubAgentMaxTurns:          15,
+		SubAgentMaxTurns:          50,
 		SubAgentMaxRetries:        0,
 		LLMMaxRetries:             3,
 		LLMRetryBackoffSec:        []int{1, 2, 4},

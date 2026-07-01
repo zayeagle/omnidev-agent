@@ -128,9 +128,13 @@ type VerificationProgressMsg struct {
 
 // PartialCompleteMsg signals incomplete or failed completion (no success banner).
 type PartialCompleteMsg struct {
-	Summary    string
-	ProjectDir string
-	Criteria   []CriterionStatus
-	Reason     string
-	Resumable  bool // checkpoint preserved; user can resume
+	Summary            string
+	ProjectDir         string
+	Criteria           []CriterionStatus
+	Reason             string
+	Resumable          bool // checkpoint preserved; user can resume
+	AcceptanceDetail   string
+	AcceptancePassed   bool
+	AcceptancePassedN  int
+	AcceptanceTotalN   int
 }

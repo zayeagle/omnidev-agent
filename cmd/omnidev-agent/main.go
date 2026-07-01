@@ -91,7 +91,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Run log: %s\n", runLog.Path())
 		defer func() { _ = runLog.Close() }()
 	}
-	a.SetMaxTurns(cfg.MaxTurns)
+	a.SetMaxTurns(config.NormalizeTurnLimit(cfg.MaxTurns))
+	if cfg.MaxAcceptanceRecoveryCycles > 0 || cfg.AcceptanceMaxTurns > 0 {
+		cycles, turns := cfg.MaxAcceptanceRecoveryCycles, cfg.AcceptanceMaxTurns
+		if cycles <= 0 {
+			cycles = 10
+		}
+		if turns <= 0 {
+			turns = 10
+		}
+		a.SetAcceptanceLimits(cycles, turns)
+	}
 	retryCfg := cfg.LLMRetryConfig()
 	a.SetRetryConfig(retryCfg)
 	a.SetMaxConsecutiveDenials(cfg.EffectiveMaxConsecutiveToolDenials())
@@ -125,7 +135,7 @@ func main() {
 	dispatcher := agent.NewTaskDispatcher(a, agent.DispatcherOptions{
 		MaxParallel:        cfg.MaxParallel,
 		SubAgentTimeout:      time.Duration(cfg.SubAgentTimeout) * time.Second,
-		SubAgentMaxTurns:     cfg.SubAgentMaxTurns,
+		SubAgentMaxTurns:     config.NormalizeTurnLimit(cfg.SubAgentMaxTurns),
 		SubAgentMaxRetries:   cfg.SubAgentMaxRetries,
 	})
 	dispatcher.SetCheckpointStore(cpStore)
@@ -133,16 +143,17 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\nSaving session...\n")
-		_ = sessionStore.SaveActive(a.Session())
-		fmt.Fprintf(os.Stderr, "Interrupted. Session preserved.\n")
-		os.Exit(0)
-	}()
 
 	// ── Headless mode: -p "task" ──
 	if flags.prompt != "" {
+		go func() {
+			<-sigCh
+			fmt.Fprintf(os.Stderr, "\nSaving session...\n")
+			_ = sessionStore.SaveActive(a.Session())
+			fmt.Fprintf(os.Stderr, "Interrupted. Session preserved.\n")
+			os.Exit(0)
+		}()
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 

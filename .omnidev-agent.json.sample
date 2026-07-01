@@ -14,7 +14,7 @@
   "context_summarize_threshold": 0.95,
   "max_parallel": 4,
   "sub_agent_timeout": 120,
-  "sub_agent_max_turns": 10,
+  "sub_agent_max_turns": 50,
   "tool_result_max_chars": 8000,
   "tool_spool_dir": ".ai_history/tool_spool/",
   "search_code_max_lines": 100,

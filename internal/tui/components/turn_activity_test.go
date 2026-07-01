@@ -2,13 +2,36 @@ package components
 
 import "testing"
 
-func TestNormalizeActivityLabel(t *testing.T) {
-	got := normalizeActivityLabel("Calling model (turn 8/20)…")
-	want := "Working · Calling model (turn 8/20)…"
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+func TestSanitizeActivityDetail_HidesTurnLabels(t *testing.T) {
+	for _, in := range []string{
+		"Working · calling model (turn 8/20)…",
+		"Calling model (turn 8/20)…",
+		"Thinking · waiting for model (turn 3/20)…",
+		"Acceptance recovery 3/10 · turn 3/10…",
+	} {
+		if got := sanitizeActivityDetail(in); got != "" {
+			t.Fatalf("%q: got %q want empty", in, got)
+		}
 	}
-	if normalizeActivityLabel("Working · calling model (turn 1/2)…") != "Working · calling model (turn 1/2)…" {
-		t.Fatal("should not double-prefix Working")
+}
+
+func TestSanitizeActivityDetail_KeepsUsefulLabels(t *testing.T) {
+	for _, in := range []string{
+		"Working · edit_file…",
+		"Working · checking acceptance criteria…",
+		"Working · recovering acceptance…",
+	} {
+		if got := sanitizeActivityDetail(in); got != in {
+			t.Fatalf("%q: got %q", in, got)
+		}
+	}
+}
+
+func TestNormalizeActivityLabel(t *testing.T) {
+	if got := normalizeActivityLabel("Working · calling model (turn 8/20)…"); got != "Working" {
+		t.Fatalf("got %q want Working", got)
+	}
+	if normalizeActivityLabel("Working · shell_exec…") != "Working · shell_exec…" {
+		t.Fatal("tool label should remain")
 	}
 }

@@ -9,12 +9,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/zayeagle/omnidev-agent/internal/agent"
+	"github.com/zayeagle/omnidev-agent/internal/commands"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/session"
 )
 
 // runHeadless executes a single prompt and streams output to stdout/stderr.
 func runHeadless(ctx context.Context, a *agent.Agent, sess *session.Session, store *session.Store, prompt string) error {
+	if cmd, _, ok := commands.Parse(prompt); ok && cmd == "help" {
+		fmt.Println(commands.HelpText())
+		return nil
+	}
+
 	msgCh := make(chan tea.Msg, 100)
 
 	go func() {

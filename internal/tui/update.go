@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/zayeagle/omnidev-agent/internal/agent"
+	"github.com/zayeagle/omnidev-agent/internal/commands"
 	"github.com/zayeagle/omnidev-agent/internal/config"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/session"
@@ -127,109 +128,98 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	if msg.Type == tea.KeyEnter && isQuitCommand(m.input.Text()) {
+		return m.quitSession()
+	}
+
 	// During confirmation, checkpoint, or plan review — limited keys only
 	if m.confirming || m.checkpointing || m.planConfirming {
+		if msg.Type == tea.KeyCtrlC {
+			return m.handleCtrlC()
+		}
 		if m.planConfirming {
 			switch msg.Type {
 			case tea.KeyEnter:
+				if strings.TrimSpace(m.input.Text()) != "" {
+					return nil
+				}
 				if m.planConfirmReply != nil {
 					m.planConfirmReply <- agent.TaskPlanConfirmResponse{Confirmed: true}
 				}
 				m.planConfirming = false
 				m.planConfirmReply = nil
-			case tea.KeyEsc, tea.KeyCtrlC:
-				if m.planConfirmReply != nil {
-					m.planConfirmReply <- agent.TaskPlanConfirmResponse{Confirmed: false}
-				}
-				m.planConfirming = false
-				m.planConfirmReply = nil
+				return nil
+			case tea.KeyEsc:
+				m.interruptSession()
+				return nil
 			}
+			// Allow typing quit/exit in the input while reviewing the plan.
+		} else if strings.TrimSpace(m.input.Text()) == "" {
+			switch strings.ToLower(msg.String()) {
+			case "y":
+				if m.checkpointing {
+					if m.checkpointReply != nil {
+						m.checkpointReply <- agent.CheckpointResponse{Resume: true}
+					}
+					m.checkpointing = false
+					m.checkpointReply = nil
+					return nil
+				}
+				if m.confirmReply != nil {
+					m.confirmReply <- permissions.ConfirmResponse{Granted: true, Reason: "user approved"}
+				}
+				m.confirming = false
+				m.confirmReply = nil
+			case "a":
+				if m.checkpointing {
+					return nil
+				}
+				m.agent.Permissions().SetInteractive(false)
+				if m.confirmReply != nil {
+					m.confirmReply <- permissions.ConfirmResponse{
+						Granted:  true,
+						Reason:   "allow all",
+						AllowAll: true,
+					}
+				}
+				m.confirming = false
+				m.confirmReply = nil
+			case "n", "ctrl+c", "esc":
+				if m.checkpointing {
+					m.checkpointing = false
+					m.checkpointReply = nil
+					m.interruptSession()
+					return nil
+				}
+				if m.confirmReply != nil {
+					m.confirmReply <- permissions.ConfirmResponse{Granted: false, Reason: "user denied"}
+				}
+				m.confirming = false
+				m.confirmReply = nil
+				return nil
+			}
+		}
+		if m.confirming || m.checkpointing {
 			return nil
 		}
-		switch strings.ToLower(msg.String()) {
-		case "y":
-			if m.checkpointing {
-				if m.checkpointReply != nil {
-					m.checkpointReply <- agent.CheckpointResponse{Resume: true}
-				}
-				m.checkpointing = false
-				m.checkpointReply = nil
-				return nil
-			}
-			if m.confirmReply != nil {
-				m.confirmReply <- permissions.ConfirmResponse{Granted: true, Reason: "user approved"}
-			}
-			m.confirming = false
-			m.confirmReply = nil
-		case "a":
-			if m.checkpointing {
-				return nil
-			}
-			m.agent.Permissions().SetInteractive(false)
-			if m.confirmReply != nil {
-				m.confirmReply <- permissions.ConfirmResponse{
-					Granted:  true,
-					Reason:   "allow all",
-					AllowAll: true,
-				}
-			}
-			m.confirming = false
-			m.confirmReply = nil
-		case "n", "ctrl+c", "esc":
-			if m.checkpointing {
-				if m.checkpointReply != nil {
-					m.checkpointReply <- agent.CheckpointResponse{Resume: false}
-				}
-				m.checkpointing = false
-				m.checkpointReply = nil
-				return nil
-			}
-			if m.confirmReply != nil {
-				m.confirmReply <- permissions.ConfirmResponse{Granted: false, Reason: "user denied"}
-			}
-			m.confirming = false
-			m.confirmReply = nil
-		}
-		return nil
 	}
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		m.persistActiveSession()
-		m.quitting = true
-		if m.cancel != nil {
-			m.cancel()
-		}
-		return tea.Quit
+		return m.handleCtrlC()
 
 	case tea.KeyEnter:
 		input := strings.TrimSpace(m.input.Text())
+		if input != "" && isSessionSlashCommand(input) {
+			m.applyBuiltinCommand(input)
+			return nil
+		}
 		if input == "" {
-			if t := m.currentTurn(); t != nil {
-				if t.HasCollapsibleThinking() {
-					t.ToggleThinkExpanded()
-					return nil
-				}
-				if t.HasCompletion() && len(t.Tasks) > 0 {
-					t.ToggleTasksExpanded()
-					return nil
-				}
+			if t := m.currentTurn(); t != nil && t.HasCollapsibleThinking() {
+				t.ToggleThinkExpanded()
+				return nil
 			}
 			return nil
-		}
-		if isSessionSlashCommand(input) {
-			m.input.Submit()
-			m.handleSlashCommand(input)
-			return nil
-		}
-		if input == "quit" || input == "exit" {
-			m.input.Submit()
-			m.persistActiveSession()
-			m.quitting = true
-			if m.cancel != nil {
-				m.cancel()
-			}
-			return tea.Quit
 		}
 		if m.isWorking() {
 			return nil
@@ -245,11 +235,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			t.ToggleThinkExpanded()
 		}
 	case tea.KeyEsc:
-		if !m.confirming && m.isWorking() && m.cancel != nil {
-			m.cancel()
-			if t := m.currentTurn(); t != nil {
-				t.MarkCancelled()
-			}
+		if !m.confirming && m.isWorking() {
+			m.interruptSession()
 		}
 	case tea.KeyBackspace:
 		if m.isWorking() {
@@ -273,7 +260,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.input.MoveRight()
 	case tea.KeyHome:
 		if m.input.Text() == "" {
-			m.turns.ScrollUp(1<<30, m.transcriptViewportHeight())
+			m.scrollUp(1 << 30)
 		} else {
 			m.input.MoveHome()
 		}
@@ -285,20 +272,20 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyUp:
 		if m.isWorking() || keyScrollsTranscript(msg) {
-			m.turns.ScrollUp(3, m.transcriptViewportHeight())
+			m.scrollUp(3)
 		} else {
 			m.input.HistPrev()
 		}
 	case tea.KeyDown:
 		if m.isWorking() || keyScrollsTranscript(msg) {
-			m.turns.ScrollDown(3, m.transcriptViewportHeight())
+			m.scrollDown(3)
 		} else {
 			m.input.HistNext()
 		}
 	case tea.KeyPgUp:
-		m.turns.ScrollUp(m.transcriptViewportHeight()-1, m.transcriptViewportHeight())
+		m.scrollUp(m.scrollViewportHeight() - 1)
 	case tea.KeyPgDown:
-		m.turns.ScrollDown(m.transcriptViewportHeight()-1, m.transcriptViewportHeight())
+		m.scrollDown(m.scrollViewportHeight() - 1)
 	case tea.KeySpace:
 		if strings.TrimSpace(m.input.Text()) == "" {
 			if t := m.currentTurn(); t != nil && t.HasCollapsibleThinking() {
@@ -309,12 +296,6 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.input.Insert(' ')
 	case tea.KeyRunes:
 		for _, r := range msg.Runes {
-			if r == 't' && strings.TrimSpace(m.input.Text()) == "" {
-				if turn := m.currentTurn(); turn != nil && turn.HasCompletion() && len(turn.Tasks) > 0 {
-					turn.ToggleTasksExpanded()
-					return nil
-				}
-			}
 			// Some Windows terminals emit DEL/BS as runes instead of KeyBackspace.
 			if r == '\b' || r == 127 {
 				m.input.DeleteBefore()
@@ -464,24 +445,31 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 
 	case agent.PartialCompleteMsg:
 		if !t.IsChatMode() {
-			if len(msg.Criteria) > 0 {
-				detail := formatPartialAcceptanceDetail(msg.Criteria)
-				passed := 0
+			detail := strings.TrimSpace(msg.AcceptanceDetail)
+			passedN, totalN := msg.AcceptancePassedN, msg.AcceptanceTotalN
+			if detail == "" && len(msg.Criteria) > 0 {
+				detail = formatPartialAcceptanceDetail(msg.Criteria)
+				passedN = 0
 				for _, c := range msg.Criteria {
 					if c.Met {
-						passed++
+						passedN++
 					}
 				}
-				t.ShowAcceptanceReport(detail, false, passed, len(msg.Criteria))
+				totalN = len(msg.Criteria)
 			}
-			t.MarkError(msg.Summary)
+			if detail != "" {
+				t.SetCompletionReport(msg.Summary, msg.ProjectDir, detail, msg.AcceptancePassed, passedN, totalN, true, msg.Reason)
+			} else {
+				t.SetCompletionReport(msg.Summary, msg.ProjectDir, "", false, 0, 0, true, msg.Reason)
+			}
+			t.MarkError(msg.Reason)
 			for _, tk := range t.Tasks {
 				if tk.Status == components.StatusRunning || tk.Status == components.StatusPending {
 					tk.Status = components.StatusFailed
 				}
 			}
 			if msg.Resumable {
-				t.AddStatusLine("Acceptance incomplete — restart and choose Resume to continue from checkpoint (从验收断点继续).")
+				t.AddStatusLine("Acceptance incomplete — restart and choose Resume to continue from checkpoint.")
 			}
 		}
 		m.turns.ScrollToBottom()
@@ -534,7 +522,7 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 		if t != nil {
 			t.AddStatusLine(fmt.Sprintf("Checkpoint: %d/%d tasks done (%s)", msg.Completed, msg.Total, msg.Phase))
 			if msg.AcceptanceIncomplete {
-				t.AddStatusLine("Previous run stopped at acceptance gate — Resume to continue (从验收断点继续).")
+				t.AddStatusLine("Previous run stopped at acceptance gate — Resume to continue.")
 			}
 		}
 
@@ -549,7 +537,13 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 
 	// ── Error ──
 	case agent.ErrorMsg:
-		t.MarkError(msg.Error)
+		if msg.Error == "interrupted" || msg.Error == "cancelled" {
+			if t.FinalStatus == components.TurnRunning {
+				t.MarkInterrupted()
+			}
+		} else {
+			t.MarkError(msg.Error)
+		}
 
 	// ── Done ──
 	case agent.DoneMsg:
@@ -562,23 +556,11 @@ func (m *model) handleAgentMsg(msg tea.Msg) {
 }
 
 func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	vh := m.transcriptViewportHeight()
 	switch msg.Type {
 	case tea.MouseWheelUp:
-		m.turns.ScrollUp(3, vh)
+		m.scrollUp(3)
 	case tea.MouseWheelDown:
-		m.turns.ScrollDown(3, vh)
-	case tea.MouseLeft, tea.MouseRelease:
-		if m.tasksToggleAtLine >= 0 && msg.Y >= m.tasksToggleAtLine-1 && msg.Y <= m.tasksToggleAtLine+1 {
-			if t := m.currentTurn(); t != nil && t.HasCompletion() && len(t.Tasks) > 0 {
-				t.ToggleTasksExpanded()
-			}
-		}
-		if m.acceptanceToggleAtLine >= 0 && msg.Y >= m.acceptanceToggleAtLine-1 && msg.Y <= m.acceptanceToggleAtLine+1 {
-			if t := m.currentTurn(); t != nil && t.HasCompletion() && strings.TrimSpace(t.AcceptanceDetailText()) != "" {
-				t.ToggleAcceptanceExpanded()
-			}
-		}
+		m.scrollDown(3)
 	}
 	return nil
 }
@@ -631,6 +613,7 @@ func parseTaskUpdate(t *components.Turn, line string, status components.ItemStat
 // ── startAgentLoop / readAgentMsg ────────────────────────────────────────────
 
 func (m *model) startAgentLoop(instruction string) tea.Cmd {
+	instruction = m.agent.PrepareRunInstruction(instruction)
 	spawn := func() tea.Msg {
 		msgCh := make(chan tea.Msg, 64)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -700,26 +683,7 @@ func readAgentMsg(ch <-chan tea.Msg) tea.Cmd {
 
 func (m *model) showHelp() {
 	t := m.newTurn("/help")
-	t.SetCommandOutput("Built-in commands:\n" +
-		"  /help       — show this help\n" +
-		"  /clear      — clear transcript (keeps agent context)\n" +
-		"  /archive    — archive current session and start fresh\n" +
-		"  /sessions   — list archived sessions (first prompt, stats)\n" +
-		"  /session <id> — preview a saved session\n" +
-		"  /model      — show current model\n" +
-		"  /status     — show agent status\n" +
-		"  /skills     — list loaded agent skills\n" +
-		"  /skill <n>  — load a skill into session context\n" +
-		"  /yolo       — toggle permission mode (confirm ↔ yolo)\n" +
-		"  Ctrl+Y      — toggle permission mode anytime (even while agent runs)\n" +
-		"  [A]         — during a permission prompt: allow all remaining ops\n" +
-		"  /checkpoint — show in-progress checkpoint\n" +
-		"  /checkpoint rollback <task_id> — rollback and re-run from task\n" +
-		"  quit, exit, Ctrl+C — exit\n" +
-		"\n" +
-		"Keyboard: ↑↓ history · PgUp/PgDn scroll · Home/End jump (empty input) · Ctrl/Alt+↑↓ scroll\n" +
-		"          Tab/Enter/Space expand Thinking · t/Enter expand To-dos · activity above input\n" +
-		"          Ctrl+Y toggle confirm/yolo · Esc cancel · Y/N/A confirm")
+	t.SetCommandOutput(commands.HelpText())
 }
 
 // ── Status ───────────────────────────────────────────────────────────────────
@@ -731,7 +695,8 @@ func NewStatusInfo(a *agent.Agent, cfg *config.Config) string {
 	sb.WriteString("  Provider:     " + cfg.Provider + "\n")
 	sb.WriteString("  Model:        " + cfg.Model + "\n")
 	sb.WriteString("  Base URL:     " + cfg.BaseURL + "\n")
-	sb.WriteString("  Max turns:    " + fmt.Sprintf("%d", cfg.MaxTurns) + "\n")
+	sb.WriteString("  Max turns:    " + config.FormatTurnLimit(cfg.MaxTurns) + "\n")
+	sb.WriteString("  Sub-agent max turns: " + config.FormatTurnLimit(cfg.SubAgentMaxTurns) + "\n")
 	sb.WriteString("  Timeout:      " + fmt.Sprintf("%d", cfg.Timeout) + "s\n")
 	sb.WriteString("  Tools:        " + fmt.Sprintf("%d", a.Toolbox().Count()) + " registered\n")
 	if a.Permissions().Interactive() {
@@ -931,8 +896,7 @@ func parseAllTaskLines(t *components.Turn, content string) {
 }
 
 func isAgentProcessMessage(content string) bool {
-	lower := strings.ToLower(content)
-	return isMajorProcessMessage(content) || strings.Contains(lower, "calling model")
+	return isMajorProcessMessage(content)
 }
 
 func isMajorProcessMessage(content string) bool {
@@ -956,7 +920,7 @@ func isMajorProcessMessage(content string) bool {
 		"auto-reconnecting",
 		"Stopped:",
 		"── Acceptance",
-		"[验收",
+		"[ACCEPTANCE",
 	}
 	for _, m := range markers {
 		if strings.Contains(content, m) {

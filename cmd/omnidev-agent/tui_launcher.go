@@ -13,7 +13,11 @@ import (
 )
 
 func runTUI(a *agent.Agent, cfg *config.Config, guard *agent.ProjectAwarenessGuard, store *session.Store) {
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	var opts []tea.ProgramOption
+	// Default: inline mode so the terminal can select/copy text. Set OMNIDEV_ALT_SCREEN=1 for full-screen.
+	if os.Getenv("OMNIDEV_ALT_SCREEN") == "1" {
+		opts = append(opts, tea.WithAltScreen())
+	}
 	if os.Getenv("OMNIDEV_NO_MOUSE") != "1" {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}

@@ -29,28 +29,20 @@ func (m *model) View() string {
 
 	b.WriteString(components.AgentHeader(m.headerInfo(), w))
 
-	if m.turns.Count() > 0 {
-		pinTasks := m.pinTasksTurn()
-		if pinTasks != nil {
-			panel := components.TaskPanelLines(pinTasks, w, m.pinnedTodoStatus())
-			if acc := components.AcceptancePanelLines(pinTasks, w); len(acc) > 0 {
-				if len(panel) > 0 {
-					panel = append(panel, "")
-				}
-				panel = append(panel, acc...)
-			}
-			if len(panel) > 0 {
-				b.WriteString(strings.Join(panel, "\n"))
-				b.WriteString("\n")
-			}
+	working := m.isWorking()
+	inDialog := m.confirming || m.checkpointing || m.planConfirming
+
+	if m.turns.Count() > 0 && !inDialog {
+		ex := m.scrollExtras()
+		scrollH := m.scrollViewportHeight()
+		visible, _ := m.turns.ViewScroll(scrollH, ex.prefix, ex.suffix)
+		if visible != "" {
+			b.WriteString(visible)
 		}
-		scrollH := m.transcriptViewportHeight()
-		b.WriteString(m.turns.View(scrollH, pinTasks))
 	}
 
 	b.WriteString("\n")
 
-	working := m.isWorking()
 	if m.confirming {
 		if working {
 			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
@@ -77,43 +69,21 @@ func (m *model) View() string {
 		dialog := components.PlanConfirmDialog(w, taskCount)
 		b.WriteString(components.ConfirmOverlay(w, dialog))
 	} else {
-		if working {
-			b.WriteString(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
-			b.WriteString("\n")
-		}
-		if cp := components.CompletionPanelLayout(m.currentTurn(), w); len(cp.Lines) > 0 {
-			baseLines := visualLineCount(b.String())
-			if cp.TasksToggleLine >= 0 {
-				m.tasksToggleAtLine = baseLines + cp.TasksToggleLine
-			} else {
-				m.tasksToggleAtLine = -1
-			}
-			if cp.AcceptanceToggleLine >= 0 {
-				m.acceptanceToggleAtLine = baseLines + cp.AcceptanceToggleLine
-			} else {
-				m.acceptanceToggleAtLine = -1
-			}
-			b.WriteString(strings.Join(cp.Lines, "\n"))
-		} else {
-			m.tasksToggleAtLine = -1
-			m.acceptanceToggleAtLine = -1
-		}
-		b.WriteString("\n")
 		b.WriteString(m.input.View(working, m.turns.Count() > 0, w))
 		b.WriteString("\n")
 		b.WriteString(components.FooterBar(
 			w,
 			modelName,
 			contextUsagePct(m.agent),
-			m.turns.ScrollHint(m.transcriptViewportHeight()),
+			m.scrollHint(),
 			m.footerExtra(),
 		))
-		if hint := components.FooterExitHint(w); hint != "" {
+		if hint := components.FooterExitHint(w, m.isInSession()); hint != "" {
 			b.WriteString("\n")
 			b.WriteString(hint)
 		}
 	}
 
-	_ = h // height drives transcriptViewportHeight via layout helpers
+	_ = h // height drives contentViewportHeight via layout helpers
 	return b.String()
 }

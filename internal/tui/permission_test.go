@@ -28,8 +28,10 @@ func TestTogglePermissionModeDuringSession(t *testing.T) {
 }
 
 func TestIsSessionSlashCommand(t *testing.T) {
-	if !isSessionSlashCommand("/yolo") {
-		t.Fatal("/yolo should be session command")
+	for _, in := range []string{"/yolo", "/help", "/Help", "help", "h"} {
+		if !isSessionSlashCommand(in) {
+			t.Fatalf("%q should be session command", in)
+		}
 	}
 	if isSessionSlashCommand("hello") {
 		t.Fatal("normal text should not be slash command")

@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/zayeagle/omnidev-agent/internal/commands"
 	"github.com/zayeagle/omnidev-agent/internal/llm"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/session"
@@ -38,6 +39,10 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 		}
 		a.mu.Unlock()
 	}()
+
+	if handled, err := a.tryBuiltinCommand(ctx, instruction, msgCh); handled || err != nil {
+		return err
+	}
 
 	// 1. Add user message to session
 	a.session.AddWithState("user", instruction, StateThinking.String(), 0)
@@ -149,6 +154,9 @@ func (a *Agent) RunLoop(ctx context.Context, instruction string, msgCh chan<- te
 
 // classifyIntent uses strict chat heuristics first; optional LLM when configured.
 func (a *Agent) classifyIntent(ctx context.Context, instruction string, msgCh chan<- tea.Msg) IntentClass {
+	if commands.IsBuiltin(instruction) {
+		return IntentChat
+	}
 	// Follow-ups after code work always enter the task pipeline (unless pure greeting).
 	if a.hasPriorCodeActivity() && !isPureGreeting(instruction) {
 		return IntentCodeMod
@@ -264,13 +272,15 @@ func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTool
 	reviewNudges := 0
 	exitGateNudges := a.restoreAcceptanceFromCheckpoint()
 	instruction := latestUserInstruction(a.session)
+	exitedClean := false
 
-	for turn := 0; turn < a.maxTurns; turn++ {
+	for turn := 0; a.turnsUnlimited() || turn < a.maxTurns; turn++ {
 		select {
 		case <-ctx.Done():
+			a.SaveInterruptCheckpoint(turn)
 			a.setState(StateError)
-			a.session.AddWithState("system", "agent cancelled", StateError.String(), 0)
-			msgCh <- ErrorMsg{Error: "cancelled"}
+			a.session.AddWithState("system", "agent interrupted", StateError.String(), 0)
+			msgCh <- ErrorMsg{Error: "interrupted"}
 			return ctx.Err()
 		default:
 		}
@@ -278,14 +288,12 @@ func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTool
 		if includeTools {
 			a.setState(StateExecuting)
 			msgCh <- AgentStateMsg{State: StateExecuting}
-			emitActivity(msgCh, fmt.Sprintf("Working · calling model (turn %d/%d)…", turn+1, a.maxTurns))
 		} else {
 			a.setState(StateThinking)
 			msgCh <- AgentStateMsg{State: StateThinking}
-			emitActivity(msgCh, fmt.Sprintf("Thinking · waiting for model (turn %d/%d)…", turn+1, a.maxTurns))
 		}
 		messages := a.buildMessages()
-		a.logRun("llm", "turn %d/%d request msgs=%d", turn+1, a.maxTurns, len(messages))
+		a.logRun("llm", "turn %s request msgs=%d", formatTurnCounter(turn+1, a.maxTurns), len(messages))
 		turnStart := time.Now()
 		req := &llm.Request{Messages: messages}
 		if includeTools {
@@ -316,8 +324,8 @@ func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTool
 			toolCalls = resp.ToolCalls
 			assistantContent = resp.Content
 		}
-		a.logRun("llm", "turn %d/%d response duration=%s content_chars=%d tool_calls=%d",
-			turn+1, a.maxTurns, time.Since(turnStart).Round(time.Millisecond), len(assistantContent), len(toolCalls))
+		a.logRun("llm", "turn %s response duration=%s content_chars=%d tool_calls=%d",
+			formatTurnCounter(turn+1, a.maxTurns), time.Since(turnStart).Round(time.Millisecond), len(assistantContent), len(toolCalls))
 
 		if len(toolCalls) > 0 {
 			ensureToolCallIDs(toolCalls, turn)
@@ -340,10 +348,12 @@ func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTool
 					continue
 				}
 				if passed {
+					exitedClean = true
 					break
 				}
 				continue
 			}
+			exitedClean = true
 			break
 		}
 
@@ -614,7 +624,22 @@ func (a *Agent) agentLoop(ctx context.Context, msgCh chan<- tea.Msg, includeTool
 		}
 	}
 
+	if !exitedClean && a.state != StateError && !a.turnsUnlimited() {
+		a.emitLoopExhaustedSummary(ctx, msgCh)
+	}
+
 	return nil
+}
+
+func (a *Agent) emitLoopExhaustedSummary(ctx context.Context, msgCh chan<- tea.Msg) {
+	reason := a.loopExhaustedReason()
+	summary := a.BuildSessionSummary(ctx, SessionOutcomePartial, reason, nil, nil)
+	if summary == "" {
+		summary = fmt.Sprintf("Stopped: reached %s.", reason)
+	}
+	a.session.AddWithState("system", "[ITERATION LIMIT]\n"+summary, StateExecuting.String(), 0)
+	msgCh <- StreamChunkMsg{Content: "Iteration limit — summary:\n\n" + summary, Done: true}
+	a.logRun("llm", "iteration limit: %s", reason)
 }
 
 // ensureToolCallIDs assigns stable IDs to tool calls that lack them.
@@ -755,7 +780,7 @@ func (a *Agent) signalTaskComplete(ctx context.Context, msgCh chan<- tea.Msg, in
 			if !mech.allOK() && mech.Summary == "" {
 				mech = mechanicalVerifyResult{WorkspaceOK: allCriteriaMet(criteria), CustomOK: true}
 			}
-			msgCh <- NewAllCompleteWithAcceptance(projectDir, formatAcceptanceReport(criteria, mech), allPassed, passedN, totalN)
+			msgCh <- NewAllCompleteWithAcceptance(conclusion, projectDir, formatAcceptanceReport(criteria, mech), allPassed, passedN, totalN)
 		} else {
 			msgCh <- NewAllComplete(conclusion, projectDir)
 		}
@@ -769,32 +794,50 @@ func (a *Agent) signalTaskComplete(ctx context.Context, msgCh chan<- tea.Msg, in
 
 func (a *Agent) signalTaskFailed(ctx context.Context, msgCh chan<- tea.Msg, reason string, criteria []CriterionStatus, results []TaskResult) {
 	projectDir := a.resolveVerifyDir()
-	summary := reason
 	if len(criteria) > 0 {
 		report := formatAcceptanceReport(criteria, a.pendingMech)
 		msgCh <- StreamChunkMsg{Content: report, Done: true}
 		a.logRun("acceptance", "task failed: %s\n%s", reason, report)
-		summary = reason + " — " + formatVerificationSummary(criteria)
 	} else {
 		a.logRun("acceptance", "task failed: %s", reason)
+	}
+	conclusion := a.BuildSessionSummary(ctx, SessionOutcomeFailed, reason, results, criteria)
+	if conclusion == "" {
+		conclusion = reason
+		if len(criteria) > 0 {
+			conclusion += " — " + formatVerificationSummary(criteria)
+		}
 	}
 	resumable := a.acceptanceStrict && len(criteria) > 0 && !allCriteriaMet(criteria)
 	if resumable {
 		plan := a.ensureAcceptancePlan(ctx, latestUserInstruction(a.session))
 		a.persistAcceptanceCheckpoint(plan, criteria, 0)
 	}
+	detail := ""
+	passedN, totalN := 0, len(criteria)
+	if len(criteria) > 0 {
+		detail = formatAcceptanceReport(criteria, a.pendingMech)
+		for _, c := range criteria {
+			if c.Met {
+				passedN++
+			}
+		}
+	}
 	msgCh <- PartialCompleteMsg{
-		Summary:    summary,
+		Summary:    conclusion,
 		ProjectDir: projectDir,
 		Criteria:   criteria,
 		Reason:     reason,
 		Resumable:  resumable,
+		AcceptanceDetail: detail,
+		AcceptancePassed: passedN == totalN && totalN > 0,
+		AcceptancePassedN: passedN,
+		AcceptanceTotalN:  totalN,
 	}
-	msgCh <- StreamChunkMsg{Content: "Stopped: " + reason, Done: true}
+	msgCh <- StreamChunkMsg{Content: conclusion, Done: true}
 	msgCh <- ErrorMsg{Error: reason}
 	a.setState(StateError)
 	msgCh <- AgentStateMsg{State: StateError}
-	_ = results
 }
 
 func formatVerificationSummary(statuses []CriterionStatus) string {

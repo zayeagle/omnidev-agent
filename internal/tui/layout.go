@@ -35,14 +35,7 @@ func (m *model) headerLineCount() int {
 
 func (m *model) chromeLineCount(working bool) int {
 	w := effectiveWidth(m.width)
-	n := 0
-	if working {
-		n += renderedLineCount(components.WorkingIndicator(m.spinnerFrame, m.workingLabel(), w))
-	}
-	if cp := components.CompletionPanelLayout(m.currentTurn(), w); len(cp.Lines) > 0 {
-		n += renderedLineCount(strings.Join(cp.Lines, "\n"))
-	}
-	n += renderedLineCount(m.input.View(working, m.turns.Count() > 0, w))
+	n := renderedLineCount(m.input.View(working, m.turns.Count() > 0, w))
 	modelName := m.cfg.Model
 	if modelName == "" {
 		modelName = "Auto"
@@ -54,6 +47,6 @@ func (m *model) chromeLineCount(working bool) int {
 		"", // avoid recursive layout via scroll hint
 		m.footerExtra(),
 	))
-	n += renderedLineCount(components.FooterExitHint(w))
+	n += renderedLineCount(components.FooterExitHint(w, m.isInSession()))
 	return n
 }

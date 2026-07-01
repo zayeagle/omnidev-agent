@@ -8,30 +8,32 @@ import (
 )
 
 var (
-	completionHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399")).Bold(true)
-	completionBoxStyle    = lipgloss.NewStyle().
+	completionHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399")).Bold(true)
+	completionHeaderWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171")).Bold(true)
+	completionSectionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA")).Bold(true)
+	completionBoxStyle     = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#059669")).
 				Padding(0, 1)
+	completionWarnBoxStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#B45309")).
+				Padding(0, 1)
 	completionTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#D1FAE5"))
-	completionToggleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
 )
 
-// CompletionPanel renders the pinned completion banner and optional collapsible tasks.
-// TasksToggleLine / AcceptanceToggleLine are 0-based line indices for click-to-expand, or -1.
+// CompletionPanel is the pinned post-task report below the transcript.
 type CompletionPanel struct {
-	Lines                 []string
-	TasksToggleLine       int
-	AcceptanceToggleLine  int
+	Lines []string
 }
 
-// CompletionPanelLayout builds completion UI below the transcript.
+// CompletionPanelLayout builds the full completion report (no collapse).
 func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
-	out := CompletionPanel{TasksToggleLine: -1, AcceptanceToggleLine: -1}
+	out := CompletionPanel{}
 	if t == nil || t.IsChatMode() {
 		return out
 	}
-	if strings.TrimSpace(t.projectDir) == "" && strings.TrimSpace(t.completionMsg) == "" && strings.TrimSpace(t.acceptanceDetail) == "" {
+	if !t.HasCompletion() && len(t.Tasks) == 0 {
 		return out
 	}
 	if width < 20 {
@@ -46,89 +48,95 @@ func CompletionPanelLayout(t *Turn, width int) CompletionPanel {
 		inner = 20
 	}
 
-	var rows []string
-	hasAcceptanceDetail := strings.TrimSpace(t.acceptanceDetail) != ""
+	var lines []string
+	if t.completionFailed {
+		lines = append(lines, completionHeaderWarn.Render("⚠ Task incomplete"))
+	} else {
+		lines = append(lines, completionHeaderStyle.Render("✓ Task completed"))
+	}
+	lines = append(lines, "")
 
-	if hasAcceptanceDetail {
-		if t.AcceptanceExpanded {
-			for _, line := range strings.Split(t.acceptanceDetail, "\n") {
-				line = strings.TrimRight(line, " \t")
-				if line == "" {
-					rows = append(rows, "")
-					continue
-				}
-				for _, wl := range WrapDisplayWidth(line, inner) {
-					rows = append(rows, completionTextStyle.Render(wl))
-				}
-			}
+	if len(t.Tasks) > 0 {
+		lines = append(lines, completionSectionStyle.Render("Completed sub-tasks"))
+		tasks := append([]*TaskEntry(nil), t.Tasks...)
+		SortTasksByID(tasks)
+		if box := RenderTodoListBox(tasks, width); box != "" {
+			lines = append(lines, box)
 		}
-	} else if msg := strings.TrimSpace(t.completionMsg); msg != "" {
-		for _, line := range strings.Split(msg, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				rows = append(rows, "")
-				continue
-			}
-			for _, wl := range WrapDisplayWidth(line, inner) {
-				rows = append(rows, completionTextStyle.Render(wl))
-			}
+		lines = append(lines, "")
+	}
+
+	if detail := strings.TrimSpace(t.acceptanceDetail); detail != "" {
+		lines = append(lines, completionSectionStyle.Render("Acceptance results"))
+		lines = append(lines, renderPlainBlock(detail, inner, completionTextStyle)...)
+		lines = append(lines, "")
+	}
+
+	if reason := strings.TrimSpace(t.failureReason); reason != "" {
+		lines = append(lines, completionSectionStyle.Render("Failure reason"))
+		lines = append(lines, renderPlainBlock(reason, inner, completionTextStyle)...)
+		lines = append(lines, "")
+	}
+
+	if summary := strings.TrimSpace(t.completionMsg); summary != "" {
+		lines = append(lines, completionSectionStyle.Render("Summary"))
+		boxStyle := completionBoxStyle
+		if t.completionFailed {
+			boxStyle = completionWarnBoxStyle
 		}
+		rows := renderPlainBlock(summary, inner, completionTextStyle)
+		if len(rows) > 0 {
+			lines = append(lines, boxStyle.Width(boxWidth).Render(strings.Join(rows, "\n")))
+		}
+		lines = append(lines, "")
 	}
 
 	if t.projectDir != "" {
-		if len(rows) > 0 {
-			rows = append(rows, "")
-		}
-		rows = append(rows, completionTextStyle.Render("Project location:"))
+		lines = append(lines, completionSectionStyle.Render("Project location"))
 		for _, wl := range WrapDisplayWidth(t.projectDir, inner) {
-			rows = append(rows, completionTextStyle.Render("  "+wl))
+			lines = append(lines, completionTextStyle.Render("  "+wl))
 		}
-	} else if len(rows) == 0 && !hasAcceptanceDetail {
-		return out
+		lines = append(lines, "")
 	}
 
-	out.Lines = append(out.Lines, "", completionHeaderStyle.Render("✓ Task completed"))
-
-	if len(t.Tasks) > 0 {
-		tasks := append([]*TaskEntry(nil), t.Tasks...)
-		SortTasksByID(tasks)
-		done, _ := taskCounts(tasks)
-		chevron := "▸"
-		if t.TasksExpanded {
-			chevron = "▾"
-		}
-		out.TasksToggleLine = len(out.Lines)
-		toggle := completionToggleStyle.Render(fmt.Sprintf("  %s To-dos %d/%d — click to expand", chevron, done, len(tasks)))
-		out.Lines = append(out.Lines, toggle)
-		if t.TasksExpanded {
-			if box := RenderTodoListBox(tasks, width); box != "" {
-				out.Lines = append(out.Lines, box)
-			}
-		}
-	}
-
-	if hasAcceptanceDetail {
-		chevron := "▸"
-		if t.AcceptanceExpanded {
-			chevron = "▾"
-		}
-		label := fmt.Sprintf("  %s 验收通过 %d/%d · 查看详细", chevron, t.acceptancePassedN, t.acceptanceTotalN)
-		if !t.acceptancePassed {
-			label = fmt.Sprintf("  %s 验收未通过 %d/%d · 查看详细", chevron, t.acceptancePassedN, t.acceptanceTotalN)
-		}
-		out.AcceptanceToggleLine = len(out.Lines)
-		out.Lines = append(out.Lines, completionToggleStyle.Render(label))
-	}
-
-	if len(rows) > 0 {
-		box := completionBoxStyle.Width(boxWidth).Render(strings.Join(rows, "\n"))
-		out.Lines = append(out.Lines, box)
-	}
-	out.Lines = append(out.Lines, "")
+	out.Lines = lines
 	return out
+}
+
+func renderPlainBlock(text string, inner int, style lipgloss.Style) []string {
+	var rows []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, " \t")
+		if line == "" {
+			rows = append(rows, "")
+			continue
+		}
+		for _, wl := range WrapDisplayWidth(line, inner) {
+			rows = append(rows, style.Render(wl))
+		}
+	}
+	return rows
+}
+
+func completionHeaderText(t *Turn) string {
+	if t != nil && t.completionFailed {
+		return "⚠ Task incomplete"
+	}
+	return "✓ Task completed"
 }
 
 // CompletionPanelLines is a convenience wrapper returning only line strings.
 func CompletionPanelLines(t *Turn, width int) []string {
 	return CompletionPanelLayout(t, width).Lines
+}
+
+func formatAcceptanceHeader(passed bool, passedN, totalN int) string {
+	if totalN <= 0 {
+		return "Acceptance results"
+	}
+	status := "passed"
+	if !passed {
+		status = "failed"
+	}
+	return fmt.Sprintf("Acceptance %s %d/%d", status, passedN, totalN)
 }

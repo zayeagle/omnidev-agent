@@ -29,6 +29,7 @@ type Checkpoint struct {
 	CriteriaStatus  []CriterionStatus `json:"criteria_status,omitempty"`
 	ExitGateNudges  int               `json:"exit_gate_nudges,omitempty"`
 	AcceptanceIncomplete bool           `json:"acceptance_incomplete,omitempty"`
+	Interrupted          bool           `json:"interrupted,omitempty"`
 	Turn            int               `json:"turn"` // for standard loop fallback
 	Timestamp       time.Time         `json:"timestamp"`
 }

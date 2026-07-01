@@ -122,8 +122,18 @@ func mergeEnv(dst *Config) {
 		dst.LogLevel = v
 	}
 	if v := os.Getenv("OMNIDEV_MAX_TURNS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil {
 			dst.MaxTurns = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_MAX_ACCEPTANCE_CYCLES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.MaxAcceptanceRecoveryCycles = n
+		}
+	}
+	if v := os.Getenv("OMNIDEV_ACCEPTANCE_MAX_TURNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			dst.AcceptanceMaxTurns = n
 		}
 	}
 	if v := os.Getenv("OMNIDEV_SESSION_DIR"); v != "" {
@@ -160,7 +170,7 @@ func mergeEnv(dst *Config) {
 		}
 	}
 	if v := os.Getenv("OMNIDEV_SUB_AGENT_MAX_TURNS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil {
 			dst.SubAgentMaxTurns = n
 		}
 	}
@@ -275,6 +285,12 @@ func applyNonZero(dst, src *Config) {
 	if src.MaxTurns > 0 {
 		dst.MaxTurns = src.MaxTurns
 	}
+	if src.MaxAcceptanceRecoveryCycles > 0 {
+		dst.MaxAcceptanceRecoveryCycles = src.MaxAcceptanceRecoveryCycles
+	}
+	if src.AcceptanceMaxTurns > 0 {
+		dst.AcceptanceMaxTurns = src.AcceptanceMaxTurns
+	}
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
 	}
@@ -309,6 +325,8 @@ func applyNonZero(dst, src *Config) {
 		dst.SubAgentTimeout = src.SubAgentTimeout
 	}
 	if src.SubAgentMaxTurns > 0 {
+		dst.SubAgentMaxTurns = src.SubAgentMaxTurns
+	} else if src.SubAgentMaxTurns < 0 {
 		dst.SubAgentMaxTurns = src.SubAgentMaxTurns
 	}
 	if src.SubAgentMaxRetries > 0 {

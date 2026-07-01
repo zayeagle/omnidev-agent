@@ -4,28 +4,54 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
 
-// Logger appends timestamped execution lines to a file under the executable directory.
+// Logger appends timestamped execution lines to a log file.
 type Logger struct {
 	mu   sync.Mutex
 	path string
 	f    *os.File
 }
 
-// NewInExecutableDir creates omnidev-agent-YYYYMMDD-HHMMSS.log next to the running binary.
+// resolveLogDir picks a writable log directory (not the binary install folder).
+func resolveLogDir() (string, error) {
+	if v := os.Getenv("OMNIDEV_LOG_DIR"); v != "" {
+		return v, nil
+	}
+	if runtime.GOOS == "windows" {
+		if d := os.Getenv("LOCALAPPDATA"); d != "" {
+			return filepath.Join(d, "omnidev-agent", "logs"), nil
+		}
+	}
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return filepath.Join(h, ".local", "share", "omnidev-agent", "logs"), nil
+	}
+	return executableDir()
+}
+
+// NewInExecutableDir creates omnidev-agent-YYYYMMDD-HHMMSS.log in the default log directory.
+// Logs live under %LOCALAPPDATA%/omnidev-agent/logs on Windows (writable, survives binary updates).
+// Set OMNIDEV_LOG_DIR to override. Falls back to the executable directory when needed.
 func NewInExecutableDir() (*Logger, error) {
-	dir, err := executableDir()
+	dir, err := resolveLogDir()
 	if err != nil {
 		dir = "."
 	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fallback, fbErr := executableDir()
+		if fbErr != nil {
+			return nil, fmt.Errorf("log dir %q: %w", dir, err)
+		}
+		dir = fallback
+	}
 	name := fmt.Sprintf("omnidev-agent-%s.log", time.Now().Format("20060102-150405"))
 	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open log %q: %w", path, err)
 	}
 	l := &Logger{path: path, f: f}
 	l.Line("init", "run log started path=%s", path)

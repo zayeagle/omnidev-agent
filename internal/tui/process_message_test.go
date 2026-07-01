@@ -12,7 +12,10 @@ func TestIsMajorProcessMessage(t *testing.T) {
 }
 
 func TestIsAgentProcessMessage(t *testing.T) {
-	if !isAgentProcessMessage("Working · calling model (turn 1/20)…") {
-		t.Fatal("calling model is process message for stream routing")
+	if isAgentProcessMessage("Working · calling model (turn 1/20)…") {
+		t.Fatal("calling model should not appear in transcript status lines")
+	}
+	if !isAgentProcessMessage("Working · checking acceptance criteria…") {
+		t.Fatal("major process should still route to status")
 	}
 }

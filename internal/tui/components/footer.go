@@ -11,14 +11,21 @@ var (
 	footerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
 )
 
-const footerExitHint = "Exit: quit or exit · Ctrl+C · Ctrl+Y toggle confirm/yolo"
+const (
+	footerExitHintInSession = "Ctrl+C interrupt session · quit/exit to leave · /copy · Ctrl+Y yolo"
+	footerExitHintIdle      = "Ctrl+C exit · quit or exit · /copy · Ctrl+Y yolo"
+)
 
-// FooterExitHint renders a persistent hint for leaving the agent.
-func FooterExitHint(width int) string {
+// FooterExitHint renders a persistent hint for leaving or interrupting the agent.
+func FooterExitHint(width int, inSession bool) string {
 	if width < 20 {
 		width = 80
 	}
-	lines := WrapDisplayWidth(footerExitHint, width)
+	hint := footerExitHintIdle
+	if inSession {
+		hint = footerExitHintInSession
+	}
+	lines := WrapDisplayWidth(hint, width)
 	if len(lines) == 0 {
 		return ""
 	}

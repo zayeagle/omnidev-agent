@@ -163,6 +163,7 @@ const (
 	TurnDone
 	TurnError
 	TurnCancelled
+	TurnInterrupted
 )
 
 type Turn struct {
@@ -203,13 +204,13 @@ type Turn struct {
 	// Shown when all tasks complete
 	completionMsg string
 	projectDir    string
-	TasksExpanded bool // collapsed under completion banner by default
 
-	acceptanceDetail   string
-	AcceptanceExpanded bool
-	acceptancePassed   bool
-	acceptancePassedN  int
-	acceptanceTotalN   int
+	acceptanceDetail  string
+	acceptancePassed  bool
+	acceptancePassedN int
+	acceptanceTotalN  int
+	completionFailed  bool
+	failureReason     string
 
 	fileChanges []FileChange
 
@@ -565,13 +566,17 @@ func (t *Turn) SetCompletion(summary, projectDir string) {
 }
 
 func (t *Turn) SetCompletionAcceptance(summary, projectDir, acceptanceDetail string, passed bool, passedN, totalN int) {
+	t.SetCompletionReport(summary, projectDir, acceptanceDetail, passed, passedN, totalN, false, "")
+}
+
+func (t *Turn) SetCompletionReport(summary, projectDir, acceptanceDetail string, passed bool, passedN, totalN int, failed bool, failReason string) {
 	t.projectDir = projectDir
 	t.acceptanceDetail = strings.TrimSpace(acceptanceDetail)
 	t.acceptancePassed = passed
 	t.acceptancePassedN = passedN
 	t.acceptanceTotalN = totalN
-	t.AcceptanceExpanded = false
-	t.TasksExpanded = false
+	t.completionFailed = failed
+	t.failureReason = strings.TrimSpace(failReason)
 	if t.acceptanceDetail != "" {
 		t.completionMsg = strings.TrimSpace(summary)
 	} else {
@@ -579,24 +584,10 @@ func (t *Turn) SetCompletionAcceptance(summary, projectDir, acceptanceDetail str
 	}
 }
 
-func (t *Turn) ToggleAcceptanceExpanded() {
-	if strings.TrimSpace(t.acceptanceDetail) == "" {
-		return
-	}
-	t.AcceptanceExpanded = !t.AcceptanceExpanded
-}
-
 func (t *Turn) AcceptanceDetailText() string { return t.acceptanceDetail }
 
 func (t *Turn) HasAcceptanceChecklist() bool {
 	return len(t.acceptanceChecks) > 0 && !t.HasCompletion()
-}
-
-func (t *Turn) ToggleTasksExpanded() {
-	if len(t.Tasks) == 0 {
-		return
-	}
-	t.TasksExpanded = !t.TasksExpanded
 }
 
 func (t *Turn) HasCompletion() bool {
@@ -664,17 +655,45 @@ func (t *Turn) MarkCancelled() {
 	t.active = false
 }
 
-// normalizeActivityLabel ensures task execution activity reads as Working, not bare "Calling model".
-func normalizeActivityLabel(detail string) string {
+func (t *Turn) MarkInterrupted() {
+	t.FinalStatus = TurnInterrupted
+	t.finishedAt = time.Now()
+	t.active = false
+	for _, s := range t.Steps {
+		if s.Status == StatusRunning {
+			s.Status = StatusFailed
+			s.summary = "interrupted"
+		}
+	}
+}
+
+// sanitizeActivityDetail drops per-turn LLM wait labels; those stay in run logs only.
+func sanitizeActivityDetail(detail string) string {
 	d := strings.TrimSpace(detail)
+	if d == "" {
+		return ""
+	}
+	lower := strings.ToLower(d)
+	if strings.Contains(lower, "calling model") {
+		return ""
+	}
+	if strings.Contains(lower, "waiting for model") && strings.Contains(lower, "turn ") {
+		return ""
+	}
+	if strings.Contains(lower, "acceptance recovery") && strings.Contains(lower, "turn ") {
+		return ""
+	}
+	return d
+}
+
+// normalizeActivityLabel maps activity detail to a short working-indicator label.
+func normalizeActivityLabel(detail string) string {
+	d := sanitizeActivityDetail(detail)
 	if d == "" {
 		return "Working"
 	}
 	if strings.HasPrefix(d, "Working") || strings.HasPrefix(d, "Waiting") || strings.HasPrefix(d, "Thinking") {
 		return d
-	}
-	if strings.Contains(strings.ToLower(d), "calling model") {
-		return "Working · " + d
 	}
 	return d
 }
@@ -688,21 +707,21 @@ func (t *Turn) WorkingLabel(agentState string) string {
 	case "WaitingApproval":
 		return "Waiting for approval"
 	case "Verifying":
-		if t.activityDetail != "" {
-			return normalizeActivityLabel(t.activityDetail)
+		if d := sanitizeActivityDetail(t.activityDetail); d != "" {
+			return normalizeActivityLabel(d)
 		}
 		return "Working · verifying acceptance…"
 	case "Thinking":
-		if t.activityDetail != "" {
-			return normalizeActivityLabel(t.activityDetail)
+		if d := sanitizeActivityDetail(t.activityDetail); d != "" {
+			return normalizeActivityLabel(d)
 		}
 		if t.streaming {
 			return "Thinking · streaming…"
 		}
-		return "Thinking · waiting for model…"
+		return "Thinking"
 	case "Executing", "Working":
-		if t.activityDetail != "" {
-			return normalizeActivityLabel(t.activityDetail)
+		if d := sanitizeActivityDetail(t.activityDetail); d != "" {
+			return normalizeActivityLabel(d)
 		}
 		for i := len(t.ToolCalls) - 1; i >= 0; i-- {
 			tc := t.ToolCalls[i]
@@ -743,8 +762,6 @@ type TurnList struct {
 	width          int
 	pinnedToBottom bool // true = follow latest output
 	firstVisible   int  // top line index when pinnedToBottom is false
-	omitTasksFrom      *Turn // set during View; hide duplicate task box in scroll body
-	omitAcceptanceFrom *Turn
 }
 
 func NewTurnList(maxTurns int) *TurnList {
@@ -755,12 +772,24 @@ func NewTurnList(maxTurns int) *TurnList {
 	}
 }
 
+func (tl *TurnList) combinedViewportLines(prefix, suffix []string) []string {
+	core := tl.buildAllLines()
+	if len(prefix) == 0 && len(core) == 0 && len(suffix) == 0 {
+		return nil
+	}
+	all := make([]string, 0, len(prefix)+len(core)+len(suffix))
+	all = append(all, prefix...)
+	all = append(all, core...)
+	all = append(all, suffix...)
+	return FlattenViewportLines(all)
+}
+
 // ScrollUp moves the viewport toward older content.
-func (tl *TurnList) ScrollUp(lines, viewportHeight int) {
+func (tl *TurnList) ScrollUp(lines, viewportHeight int, prefix, suffix []string) {
 	if lines < 1 {
 		lines = 1
 	}
-	all := tl.buildAllLines()
+	all := tl.combinedViewportLines(prefix, suffix)
 	total := len(all)
 	if total <= viewportHeight {
 		return
@@ -780,11 +809,11 @@ func (tl *TurnList) ScrollUp(lines, viewportHeight int) {
 }
 
 // ScrollDown moves the viewport toward newer content.
-func (tl *TurnList) ScrollDown(lines, viewportHeight int) {
+func (tl *TurnList) ScrollDown(lines, viewportHeight int, prefix, suffix []string) {
 	if lines < 1 {
 		lines = 1
 	}
-	all := tl.buildAllLines()
+	all := tl.combinedViewportLines(prefix, suffix)
 	total := len(all)
 	if total <= viewportHeight {
 		tl.pinnedToBottom = true
@@ -812,11 +841,11 @@ func (tl *TurnList) ScrollToBottom() {
 func (tl *TurnList) AtBottom() bool { return tl.pinnedToBottom }
 
 // ScrollHint returns a short footer hint when not pinned to bottom.
-func (tl *TurnList) ScrollHint(viewportHeight int) string {
+func (tl *TurnList) ScrollHint(viewportHeight int, prefix, suffix []string) string {
 	if tl.pinnedToBottom {
 		return ""
 	}
-	total := len(tl.buildAllLines())
+	total := len(tl.combinedViewportLines(prefix, suffix))
 	maxStart := total - viewportHeight
 	if maxStart < 1 {
 		return ""
@@ -854,11 +883,14 @@ func (tl *TurnList) buildAllLines() []string {
 		if i > 0 {
 			allLines = append(allLines, "", "")
 		}
-		skipTasks := tl.omitTasksFrom != nil && t == tl.omitTasksFrom
-		skipAcceptance := tl.omitAcceptanceFrom != nil && t == tl.omitAcceptanceFrom
-		allLines = append(allLines, t.render(tl.width, skipTasks, skipAcceptance)...)
+		allLines = append(allLines, t.render(tl.width, false, false)...)
 	}
 	return allLines
+}
+
+// CoreLineCount returns rendered transcript line count (excludes prefix/suffix extras).
+func (tl *TurnList) CoreLineCount() int {
+	return VisualLineCount(tl.buildAllLines())
 }
 
 // AcceptancePanelLines renders the sticky acceptance checklist during verify.
@@ -878,36 +910,31 @@ func TaskPanelLines(t *Turn, width int, liveStatus string) []string {
 	return RenderTodoList(t.Tasks, width, collapse, liveStatus)
 }
 
-// View renders the scrollable transcript. Pass pinTasksTurn when its task box
-// is shown in the sticky panel above (avoids duplicate rendering).
-func (tl *TurnList) View(viewportHeight int, pinTasksTurn *Turn) string {
+// CombinedLines returns prefix + full transcript + suffix as plain line slices.
+func (tl *TurnList) CombinedLines(prefix, suffix []string) []string {
+	return tl.combinedViewportLines(prefix, suffix)
+}
+
+// ViewScroll renders prefix + transcript + suffix in one scrollable viewport.
+// The returned start index is the first visible line in the combined buffer.
+func (tl *TurnList) ViewScroll(viewportHeight int, prefix, suffix []string) (string, int) {
 	if viewportHeight < 1 {
 		viewportHeight = 3
 	}
-	prev := tl.omitTasksFrom
-	tl.omitTasksFrom = pinTasksTurn
-	if pinTasksTurn != nil && len(pinTasksTurn.acceptanceChecks) > 0 && !pinTasksTurn.HasCompletion() {
-		tl.omitAcceptanceFrom = pinTasksTurn
-	} else {
-		tl.omitAcceptanceFrom = nil
-	}
-	allLines := tl.buildAllLines()
-	tl.omitTasksFrom = prev
-	tl.omitAcceptanceFrom = nil
-
+	allLines := tl.combinedViewportLines(prefix, suffix)
 	if len(allLines) == 0 {
-		return ""
+		return "", 0
 	}
 	total := len(allLines)
 	if total <= viewportHeight {
-		return strings.Join(allLines, "\n")
+		return strings.Join(allLines, "\n"), 0
 	}
 
 	start := tl.viewStart(total, viewportHeight)
 	if !tl.pinnedToBottom {
 		tl.firstVisible = start
 	}
-	return strings.Join(allLines[start:start+viewportHeight], "\n")
+	return strings.Join(allLines[start:start+viewportHeight], "\n"), start
 }
 
 func (tl *TurnList) AddTurn(id int, input string) *Turn {
@@ -1027,6 +1054,10 @@ func (t *Turn) render(width int, skipTasks bool, skipAcceptance bool) []string {
 
 	if t.FinalStatus == TurnCancelled {
 		lines = append(lines, turnErrStyle.Render("  Cancelled"))
+		lines = append(lines, "")
+	}
+	if t.FinalStatus == TurnInterrupted {
+		lines = append(lines, turnStepStyle.Render("  Interrupted — type continue to resume, or describe changes to re-plan."))
 		lines = append(lines, "")
 	}
 	if t.FinalStatus == TurnError && t.ErrorMsg != "" {

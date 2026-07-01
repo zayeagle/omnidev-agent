@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 
+	"github.com/zayeagle/omnidev-agent/internal/agent"
+	"github.com/zayeagle/omnidev-agent/internal/commands"
 	"github.com/zayeagle/omnidev-agent/internal/permissions"
 	"github.com/zayeagle/omnidev-agent/internal/tui/components"
 )
@@ -68,61 +70,92 @@ func (m *model) notifyPermissionMode(msg string) {
 }
 
 func isSessionSlashCommand(input string) bool {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "/") {
-		return false
-	}
-	switch input {
-	case "/help", "/status", "/model", "/yolo", "/skills", "/checkpoint", "/clear", "/sessions", "/archive":
-		return true
-	}
-	return strings.HasPrefix(input, "/skill ") ||
-		strings.HasPrefix(input, "/session ") ||
-		strings.HasPrefix(input, "/checkpoint ")
+	return commands.IsBuiltin(input)
 }
 
-func (m *model) handleSlashCommand(input string) {
-	switch input {
-	case "/help":
+// applyBuiltinCommand cancels any in-flight agent work and runs a local command.
+func (m *model) applyBuiltinCommand(input string) {
+	m.abortAgentWork()
+	m.input.Submit()
+	m.handleBuiltinCommand(input)
+}
+
+func (m *model) abortAgentWork() {
+	if m.planConfirmReply != nil {
+		m.planConfirmReply <- agent.TaskPlanConfirmResponse{Confirmed: false}
+		m.planConfirming = false
+		m.planConfirmReply = nil
+	}
+	if m.checkpointReply != nil {
+		m.checkpointReply <- agent.CheckpointResponse{Resume: false}
+		m.checkpointing = false
+		m.checkpointReply = nil
+	}
+	if m.confirmReply != nil {
+		m.confirmReply <- permissions.ConfirmResponse{Granted: false, Reason: "cancelled"}
+		m.confirming = false
+		m.confirmReply = nil
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.agentCh = nil
+	if t := m.currentTurn(); t != nil && t.FinalStatus == components.TurnRunning {
+		t.MarkCancelled()
+	}
+}
+
+func (m *model) handleBuiltinCommand(input string) {
+	cmd, args, ok := commands.Parse(input)
+	if !ok {
+		return
+	}
+	switch cmd {
+	case "help":
 		m.showHelp()
-	case "/clear":
+	case "clear":
 		if !m.isWorking() {
 			m.turns = components.NewTurnList(50)
 			m.turnCount = 0
 			m.input = components.NewInputLine()
 		}
-	case "/archive":
+	case "archive":
 		if !m.isWorking() {
 			m.archiveSession()
 			t := m.newTurn("/archive")
 			t.SetCommandOutput("Session archived. Starting a new conversation.")
 		}
-	case "/sessions":
+	case "sessions":
 		m.showSessions()
-	case "/model":
+	case "model":
 		t := m.newTurn("/model")
 		t.SetCommandOutput("Current model: " + m.cfg.Model + " (" + m.cfg.Provider + ")")
-	case "/status":
+	case "status":
 		t := m.newTurn("/status")
 		t.SetCommandOutput(NewStatusInfo(m.agent, m.cfg))
-	case "/checkpoint":
-		t := m.newTurn("/checkpoint")
-		t.SetCommandOutput(m.buildCheckpointInfo())
-	case "/skills":
-		m.showSkills()
-	case "/yolo":
-		m.applyPermissionToggle()
-	default:
-		if strings.HasPrefix(input, "/skill ") {
-			m.loadSkillCommand(strings.TrimSpace(strings.TrimPrefix(input, "/skill ")))
-		} else if strings.HasPrefix(input, "/session ") {
-			m.showSession(strings.TrimSpace(strings.TrimPrefix(input, "/session ")))
-		} else if strings.HasPrefix(input, "/checkpoint ") {
-			sub := strings.TrimSpace(strings.TrimPrefix(input, "/checkpoint"))
-			if strings.HasPrefix(sub, "rollback ") {
-				taskID := strings.TrimSpace(strings.TrimPrefix(sub, "rollback "))
-				_ = m.startCheckpointRollback(taskID)
-			}
+	case "checkpoint":
+		if strings.HasPrefix(strings.ToLower(args), "rollback ") {
+			taskID := strings.TrimSpace(args[len("rollback "):])
+			_ = m.startCheckpointRollback(taskID)
+		} else {
+			t := m.newTurn("/checkpoint")
+			t.SetCommandOutput(m.buildCheckpointInfo())
 		}
+	case "skills":
+		m.showSkills()
+	case "yolo":
+		m.applyPermissionToggle()
+	case "copy":
+		m.copyScreen()
+	case "skill":
+		m.loadSkillCommand(args)
+	case "session":
+		m.showSession(args)
 	}
+}
+
+// handleSlashCommand is an alias kept for call sites; prefer applyBuiltinCommand.
+func (m *model) handleSlashCommand(input string) {
+	m.handleBuiltinCommand(input)
 }

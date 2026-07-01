@@ -38,8 +38,11 @@ func TestHeuristicAcceptancePlan(t *testing.T) {
 }
 
 func TestAuditSubTaskResults(t *testing.T) {
-	if auditSubTaskResults(nil) {
-		t.Fatal("empty results should fail audit")
+	if !auditSubTaskResults(nil) {
+		t.Fatal("empty results should pass (no recorded failures)")
+	}
+	if !auditSubTaskResults([]TaskResult{}) {
+		t.Fatal("empty slice should pass")
 	}
 	if !auditSubTaskResults([]TaskResult{{TaskID: "1", Success: true}}) {
 		t.Fatal("single success should pass")

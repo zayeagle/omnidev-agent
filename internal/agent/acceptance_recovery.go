@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const maxAcceptanceRecoveryCycles = 15
 const acceptanceStallThreshold = 3
 
 const acceptanceRecoveryPrefix = `[ACCEPTANCE RECOVERY] Verification did not pass yet.
@@ -24,17 +23,15 @@ func (a *Agent) driveUntilAccepted(ctx context.Context, msgCh chan<- tea.Msg, in
 		return nil, true
 	}
 
-	extraTurns := a.maxTurns
-	if extraTurns < 15 {
-		extraTurns = 15
-	}
+	maxCycles := a.effectiveMaxAcceptanceCycles()
+	acceptTurns := a.effectiveAcceptanceMaxTurns()
 
 	var lastStatuses []CriterionStatus
 	var lastMech mechanicalVerifyResult
 	var lastFailKey string
 	stallCount := 0
 
-	for cycle := 0; cycle < maxAcceptanceRecoveryCycles; cycle++ {
+	for cycle := 0; cycle < maxCycles; cycle++ {
 		if a.state == StateError {
 			return lastStatuses, false
 		}
@@ -65,7 +62,7 @@ func (a *Agent) driveUntilAccepted(ctx context.Context, msgCh chan<- tea.Msg, in
 			return upgraded, true
 		}
 		report := formatAcceptanceReport(statuses, mech)
-		a.logRun("acceptance", "failed cycle=%d report:\n%s", cycle+1, report)
+		a.logRun("acceptance", "failed cycle=%d/%d report:\n%s", cycle+1, maxCycles, report)
 		msgCh <- StreamChunkMsg{Content: report, Done: true}
 
 		failKey := acceptanceFailureKey(statuses, mech)
@@ -76,7 +73,7 @@ func (a *Agent) driveUntilAccepted(ctx context.Context, msgCh chan<- tea.Msg, in
 			lastFailKey = failKey
 		}
 		if stallCount >= acceptanceStallThreshold {
-			stallMsg := fmt.Sprintf("[验收停滞] 相同失败已连续 %d 次，停止自动恢复。未通过原因见上方 Acceptance criteria 与报告。", stallCount+1)
+			stallMsg := fmt.Sprintf("[ACCEPTANCE STALLED] Same failure repeated %d times — stopping auto-recovery. See Acceptance criteria and report above.", stallCount+1)
 			if hint := diagnosisStallHint(lastMech.Diagnosis); hint != "" {
 				stallMsg += "\n" + hint
 			}
@@ -87,21 +84,31 @@ func (a *Agent) driveUntilAccepted(ctx context.Context, msgCh chan<- tea.Msg, in
 		}
 
 		a.injectAcceptanceRecovery(statuses, instruction, mech)
-		passed, met := countCriteriaMet(statuses), len(statuses)
-		emitActivity(msgCh, fmt.Sprintf("Acceptance %d/%d not met — recovery round %d…", passed, met, cycle+1))
+		emitActivity(msgCh, "Working · recovering acceptance…")
 
+		savedPhase := a.loopPhase
+		savedCycle := a.acceptanceCycle
 		savedMax := a.maxTurns
-		a.maxTurns = savedMax + extraTurns
+		a.loopPhase = LoopPhaseAcceptance
+		a.acceptanceCycle = cycle + 1
+		a.maxTurns = acceptTurns
 		err := a.agentLoop(ctx, msgCh, includeTools)
 		a.maxTurns = savedMax
+		a.loopPhase = savedPhase
+		a.acceptanceCycle = savedCycle
 		if err != nil {
 			return lastStatuses, false
 		}
 	}
 
 	report := formatAcceptanceReport(lastStatuses, lastMech)
-	msgCh <- StreamChunkMsg{Content: report + "\n\n[验收] 已达最大恢复轮次 (" + fmt.Sprint(maxAcceptanceRecoveryCycles) + ")，仍未通过。", Done: true}
-	a.logRun("acceptance", "max recovery cycles exhausted")
+	limitMsg := fmt.Sprintf("[ACCEPTANCE] Max recovery cycles reached (%d/%d) — still not passing.", maxCycles, maxCycles)
+	msgCh <- StreamChunkMsg{Content: report + "\n\n" + limitMsg, Done: true}
+	summary := a.BuildSessionSummary(ctx, SessionOutcomeFailed, limitMsg, results, lastStatuses)
+	if summary != "" {
+		msgCh <- StreamChunkMsg{Content: summary, Done: true}
+	}
+	a.logRun("acceptance", "max recovery cycles exhausted (%d)", maxCycles)
 	statuses, accepted := a.runFinalAcceptanceGate(ctx, msgCh, instruction, results)
 	return statuses, accepted && allCriteriaMet(statuses)
 }
@@ -123,7 +130,5 @@ func acceptanceFailureKey(statuses []CriterionStatus, mech mechanicalVerifyResul
 }
 
 func (a *Agent) lastMechanicalVerify() mechanicalVerifyResult {
-	// Re-run lightweight read from session last [VERIFICATION] block is expensive; caller already ran verify in gate.
-	// Use checkpoint/session hint: runFinalAcceptanceGate already computed mech — store on agent briefly.
 	return a.pendingMech
 }

@@ -60,9 +60,9 @@ func TestAllCriteriaMet(t *testing.T) {
 }
 
 func TestScaleSubAgentLimits(t *testing.T) {
-	turns, timeout := scaleSubAgentLimits(Task{ID: "1", Description: repeatString("x", 250)}, 15, defaultScaledTimeout())
-	if turns < 20 {
-		t.Fatalf("expected scaled turns >= 20, got %d", turns)
+	turns, timeout := scaleSubAgentLimits(Task{ID: "1", Description: repeatString("x", 250)}, 50, defaultScaledTimeout())
+	if turns < 60 {
+		t.Fatalf("expected scaled turns >= 60, got %d", turns)
 	}
 	if timeout < 3*time.Minute {
 		t.Fatalf("expected longer timeout, got %v", timeout)

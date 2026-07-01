@@ -98,8 +98,8 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.SubAgentTimeout != 180 {
 		t.Errorf("expected default sub_agent_timeout 180, got %d", cfg.SubAgentTimeout)
 	}
-	if cfg.SubAgentMaxTurns != 15 {
-		t.Errorf("expected default sub_agent_max_turns 15, got %d", cfg.SubAgentMaxTurns)
+	if cfg.SubAgentMaxTurns != 50 {
+		t.Errorf("expected default sub_agent_max_turns 50, got %d", cfg.SubAgentMaxTurns)
 	}
 	if cfg.LLMMaxRetries != 3 {
 		t.Errorf("expected default llm_max_retries 3, got %d", cfg.LLMMaxRetries)

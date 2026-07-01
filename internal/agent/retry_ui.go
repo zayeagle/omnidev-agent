@@ -22,7 +22,7 @@ func (a *Agent) llmRetryConfig(msgCh chan<- tea.Msg) stream.RetryConfig {
 		}
 		msg := fmt.Sprintf("LLM unreachable — retrying in %s (attempt %d)…", wait, attempt)
 		if persistent {
-			msg = fmt.Sprintf("Network error — auto-reconnecting in %s (attempt %d). Press Ctrl+C to cancel.", wait, attempt)
+			msg = fmt.Sprintf("Network error — auto-reconnecting in %s (attempt %d). Press Ctrl+C to interrupt.", wait, attempt)
 		}
 		emitActivity(msgCh, msg)
 		msgCh <- StreamChunkMsg{Content: msg, Done: true}

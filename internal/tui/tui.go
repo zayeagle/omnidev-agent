@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -38,10 +37,6 @@ type model struct {
 	confirmPreview     string
 	confirmReply       chan<- permissions.ConfirmResponse
 	confirmTimeout     int
-
-	// Line index (0-based) in View output for click-to-expand rows under completion
-	tasksToggleAtLine      int
-	acceptanceToggleAtLine int
 
 	// Checkpoint resume prompt
 	checkpointing      bool
@@ -107,22 +102,6 @@ func (m *model) headerInfo() components.HeaderInfo {
 	}
 }
 
-// pinnedTodoStatus returns the live status shown on the To-dos header line.
-func (m *model) pinnedTodoStatus() string {
-	if m.confirming {
-		return "Waiting approval"
-	}
-	if m.isWorking() {
-		if label := m.workingLabel(); label != "" {
-			return label
-		}
-	}
-	if s := strings.TrimSpace(m.agentState); s != "" && s != "Idle" {
-		return s
-	}
-	return ""
-}
-
 // Init is called once when the program starts.
 func (m *model) Init() tea.Cmd {
 	return nil
@@ -175,24 +154,6 @@ func (m *model) footerExtra() string {
 	return extra
 }
 
-// pinTasksTurn returns the active turn whose task list is pinned above the scroll area.
-func (m *model) pinTasksTurn() *components.Turn {
-	t := m.currentTurn()
-	if t == nil || t.HasCompletion() {
-		return nil
-	}
-	if !m.isWorking() {
-		return nil
-	}
-	if len(t.Tasks) > 0 {
-		return t
-	}
-	if t.HasAcceptanceChecklist() {
-		return t
-	}
-	return nil
-}
-
 func (m *model) dialogOverlayHeight() int {
 	w := effectiveWidth(m.width)
 	var dialog string
@@ -232,20 +193,6 @@ func (m *model) contentViewportHeight() int {
 		msgHeight = 3
 	}
 	return msgHeight
-}
-
-// transcriptViewportHeight is the scrollable area below a pinned To-dos panel.
-func (m *model) transcriptViewportHeight() int {
-	h := m.contentViewportHeight()
-	if pin := m.pinTasksTurn(); pin != nil {
-		w := effectiveWidth(m.width)
-		sticky := len(components.TaskPanelLines(pin, w, m.pinnedTodoStatus())) + 1
-		h -= sticky
-		if h < 3 {
-			h = 3
-		}
-	}
-	return h
 }
 
 // ── Internal message types ──

@@ -22,8 +22,19 @@ Continue with tools until you can answer comprehensively, then reply with your f
 
 const synthesizeConclusionSystem = `You write the final user-facing conclusion for a coding agent session.
 Respond in the same language as the user's request (Chinese if they wrote Chinese).
-Be specific and actionable. Cover: whether the request was fulfilled, code completeness, build/binary status, and gaps.
-Do not include file paths for the project root (shown separately). No markdown headers — plain paragraphs and bullet lines are fine.`
+Structure the summary with these sections (plain labels, no markdown headers):
+1. Changes & optimizations — what files/features were changed and what was improved in this session
+2. Next steps — concrete directions to optimize, extend, or harden the work further
+Be specific and actionable. Do not repeat the full acceptance checklist (shown separately). No markdown headers.`
+
+const synthesizePartialSystem = `You write a session summary when a coding agent stopped before fully finishing.
+Respond in the same language as the user's request (Chinese if they wrote Chinese).
+Structure the summary with these sections (plain labels, no markdown headers):
+1. Failure reason — why the task did not complete (be specific)
+2. Recommended solution — concrete steps to fix the issue and retry successfully
+3. Partial progress — what was already accomplished (if any)
+4. Next steps — optional follow-up optimizations after unblocking
+Be honest about partial progress. No markdown headers.`
 
 // looksLikeReviewInstruction detects analyze/review/check completeness requests.
 func looksLikeReviewInstruction(instruction string) bool {
@@ -157,26 +168,39 @@ func extractConclusionFromSession(sess *session.Session, results []TaskResult) s
 
 // BuildFinalConclusion produces the user-facing completion text shown above the project path.
 func (a *Agent) BuildFinalConclusion(ctx context.Context, results []TaskResult, criteria []CriterionStatus) string {
-	if a.acceptanceStrict && len(criteria) > 0 && allCriteriaMet(criteria) {
-		// Detailed acceptance report is shown in the collapsible TUI panel, not duplicated here.
+	return a.BuildSessionSummary(ctx, SessionOutcomeSuccess, "", results, criteria)
+}
+
+// BuildSessionSummary synthesizes a user-facing summary for success, failure, or iteration-limit stops.
+func (a *Agent) BuildSessionSummary(ctx context.Context, outcome SessionOutcome, stopReason string, results []TaskResult, criteria []CriterionStatus) string {
+	instruction := latestUserInstruction(a.session)
+	if outcome == SessionOutcomeSuccess && a.acceptanceStrict && len(criteria) > 0 && allCriteriaMet(criteria) {
 		if extracted := extractConclusionFromSession(a.session, results); hasSubstantialConclusionText(extracted) {
 			return trimConclusion(extracted)
 		}
-		return ""
+		return formatSuccessFallbackSummary(instruction, results, criteria)
 	}
-	instruction := latestUserInstruction(a.session)
-	if extracted := extractConclusionFromSession(a.session, results); hasSubstantialConclusionText(extracted) {
+	if extracted := extractConclusionFromSession(a.session, results); hasSubstantialConclusionText(extracted) && outcome == SessionOutcomeSuccess {
 		return trimConclusion(extracted)
 	}
 	if a.provider == nil {
-		return fallbackConclusion(instruction, results)
+		return fallbackSessionSummary(outcome, stopReason, instruction, results, criteria)
 	}
-	synthesized, err := a.synthesizeConclusion(ctx, instruction, results)
+	synthesized, err := a.synthesizeSessionSummary(ctx, outcome, stopReason, instruction, results, criteria)
 	if err != nil || strings.TrimSpace(synthesized) == "" {
-		return fallbackConclusion(instruction, results)
+		return fallbackSessionSummary(outcome, stopReason, instruction, results, criteria)
 	}
 	return trimConclusion(synthesized)
 }
+
+// SessionOutcome classifies how the agent loop ended for summary generation.
+type SessionOutcome string
+
+const (
+	SessionOutcomeSuccess SessionOutcome = "success"
+	SessionOutcomePartial SessionOutcome = "partial"
+	SessionOutcomeFailed  SessionOutcome = "failed"
+)
 
 func formatConclusionFromCriteria(statuses []CriterionStatus) string {
 	var b strings.Builder
@@ -196,10 +220,25 @@ func formatConclusionFromCriteria(statuses []CriterionStatus) string {
 }
 
 func (a *Agent) synthesizeConclusion(ctx context.Context, instruction string, results []TaskResult) (string, error) {
+	return a.synthesizeSessionSummary(ctx, SessionOutcomeSuccess, "", instruction, results, nil)
+}
+
+func (a *Agent) synthesizeSessionSummary(ctx context.Context, outcome SessionOutcome, stopReason, instruction string, results []TaskResult, criteria []CriterionStatus) (string, error) {
 	digest := buildSessionDigest(a.session, results)
-	prompt := fmt.Sprintf("User request:\n%s\n\nSession activity and notes:\n%s\n\nWrite the final conclusion for the user.", instruction, digest)
+	if len(criteria) > 0 {
+		digest += "\n\nAcceptance criteria:\n" + formatConclusionFromCriteria(criteria)
+	}
+	prompt := fmt.Sprintf("User request:\n%s\n\nOutcome: %s\n", instruction, outcome)
+	if stopReason != "" {
+		prompt += fmt.Sprintf("Stop reason: %s\n", stopReason)
+	}
+	prompt += fmt.Sprintf("\nSession activity and notes:\n%s\n\nWrite the summary for the user.", digest)
+	system := synthesizeConclusionSystem
+	if outcome != SessionOutcomeSuccess {
+		system = synthesizePartialSystem
+	}
 	messages := []llm.Message{
-		{Role: "system", Content: synthesizeConclusionSystem},
+		{Role: "system", Content: system},
 		{Role: "user", Content: prompt},
 	}
 	resp, err := stream.RetryChat(ctx, a.provider, &llm.Request{Messages: messages}, a.retryConfig)
@@ -249,13 +288,111 @@ func truncateForDigest(s string, max int) string {
 }
 
 func fallbackConclusion(instruction string, results []TaskResult) string {
-	if c := extractConclusionFromSession(nil, results); c != "" {
+	return fallbackSessionSummary(SessionOutcomeSuccess, "", instruction, results, nil)
+}
+
+func fallbackSessionSummary(outcome SessionOutcome, stopReason, instruction string, results []TaskResult, criteria []CriterionStatus) string {
+	if c := extractConclusionFromSession(nil, results); c != "" && outcome == SessionOutcomeSuccess {
 		return trimConclusion(c)
 	}
-	if looksLikeReviewInstruction(instruction) {
-		return "Review finished, but the agent did not produce a detailed analysis. Expand Thinking or re-run with a narrower checklist (e.g. list missing snake-game features and run go build -o bin/snake.exe)."
+	switch outcome {
+	case SessionOutcomeSuccess:
+		return formatSuccessFallbackSummary(instruction, results, criteria)
+	case SessionOutcomeFailed:
+		return formatFailedFallbackSummary(stopReason, instruction, results, criteria)
+	default:
+		return formatPartialFallbackSummary(stopReason, instruction, criteria)
 	}
-	return "Task finished. See tool steps above for details."
+}
+
+func formatSuccessFallbackSummary(instruction string, results []TaskResult, criteria []CriterionStatus) string {
+	var b strings.Builder
+	b.WriteString("Changes & optimizations:\n")
+	if len(results) > 0 {
+		for _, r := range results {
+			if r.Success {
+				line := strings.TrimSpace(r.Content)
+				if line == "" {
+					line = "sub-task " + r.TaskID + " completed"
+				}
+				b.WriteString("- " + truncateForDigest(line, 200) + "\n")
+			}
+		}
+	} else {
+		b.WriteString("- Request addressed: " + truncateForDigest(instruction, 200) + "\n")
+	}
+	if len(criteria) > 0 {
+		b.WriteString("- Acceptance: " + formatVerificationSummary(criteria) + "\n")
+	}
+	b.WriteString("\nNext steps:\n")
+	b.WriteString("- Add or extend automated tests and CI checks\n")
+	b.WriteString("- Harden error handling and edge cases\n")
+	b.WriteString("- Refine UX and documentation before release\n")
+	return strings.TrimSpace(b.String())
+}
+
+func formatFailedFallbackSummary(stopReason, instruction string, results []TaskResult, criteria []CriterionStatus) string {
+	var b strings.Builder
+	reason := strings.TrimSpace(stopReason)
+	if reason == "" {
+		reason = "Task did not complete."
+	}
+	b.WriteString("Failure reason:\n")
+	b.WriteString(reason + "\n")
+	if len(criteria) > 0 {
+		b.WriteString("\n" + formatVerificationSummary(criteria) + "\n")
+	}
+	b.WriteString("\nRecommended solution:\n")
+	b.WriteString(failureRecoveryHints(reason, instruction, criteria))
+	if len(results) > 0 {
+		b.WriteString("\nPartial progress:\n")
+		for _, r := range results {
+			if r.Success && strings.TrimSpace(r.Content) != "" {
+				b.WriteString("- " + truncateForDigest(r.Content, 160) + "\n")
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatPartialFallbackSummary(stopReason, instruction string, criteria []CriterionStatus) string {
+	var b strings.Builder
+	if stopReason != "" {
+		b.WriteString("Failure reason:\n")
+		b.WriteString(stopReason + "\n")
+	}
+	b.WriteString("\nRecommended solution:\n")
+	b.WriteString("- Send a follow-up message to continue from the saved checkpoint\n")
+	if looksLikeReviewInstruction(instruction) {
+		b.WriteString("- Narrow the review scope and re-run with a explicit checklist\n")
+	}
+	if len(criteria) > 0 {
+		b.WriteString("\nPartial progress:\n")
+		b.WriteString(formatVerificationSummary(criteria) + "\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func failureRecoveryHints(reason, instruction string, criteria []CriterionStatus) string {
+	lower := strings.ToLower(reason + " " + instruction)
+	var hints []string
+	switch {
+	case strings.Contains(lower, "network") || strings.Contains(lower, "unreachable"):
+		hints = append(hints, "- Check API key, base URL, and network connectivity; retry when online")
+	case strings.Contains(lower, "build") || strings.Contains(lower, "compile"):
+		hints = append(hints, "- Run go build ./... locally, fix compile errors, then resume")
+	case strings.Contains(lower, "acceptance") || strings.Contains(lower, "criteria"):
+		hints = append(hints, "- Review failed acceptance rows above; fix gaps and resume from checkpoint")
+	case strings.Contains(lower, "sub-task"):
+		hints = append(hints, "- Inspect sub-task errors in the transcript; fix blockers and retry failed tasks")
+	default:
+		hints = append(hints, "- Review tool output above, fix the blocking issue, then send continue or a follow-up")
+	}
+	if len(criteria) > 0 && !allCriteriaMet(criteria) {
+		hints = append(hints, "- Address unmet acceptance criteria before marking the task done")
+	}
+	hints = append(hints, "- Use Ctrl+C to interrupt, then follow up to resume without losing progress")
+	return strings.Join(hints, "\n")
 }
 
 func trimConclusion(s string) string {
